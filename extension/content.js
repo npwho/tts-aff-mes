@@ -41,31 +41,54 @@ function rectOf(el) {
 function placeMarker(x, y, size, rgb) {
   const marker = document.createElement("div");
   marker.setAttribute("data-tts-aff-mes-marker", "true");
-  marker.style.cssText = [
-    "position:fixed",
-    `left:${x}px`,
-    `top:${y}px`,
-    `width:${size}px`,
-    `height:${size}px`,
-    `background:rgb(${rgb[0]},${rgb[1]},${rgb[2]})`,
-    "z-index:2147483647",
-    "pointer-events:none",
-    "border:none",
-    "border-radius:0",
-    "box-shadow:none",
-    "filter:none",
-    "opacity:1",
-  ].join(";");
+  // Individual property assignment (not style.cssText/setAttribute with a
+  // full string) is less likely to be blocked by a page's
+  // Content-Security-Policy style-src restriction in some Chrome versions,
+  // and !important guards against the page's own CSS overriding us.
+  const style = marker.style;
+  style.setProperty("position", "fixed", "important");
+  style.setProperty("left", `${x}px`, "important");
+  style.setProperty("top", `${y}px`, "important");
+  style.setProperty("width", `${size}px`, "important");
+  style.setProperty("height", `${size}px`, "important");
+  style.setProperty("background", `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`, "important");
+  style.setProperty("z-index", "2147483647", "important");
+  style.setProperty("pointer-events", "none", "important");
+  style.setProperty("border", "none", "important");
+  style.setProperty("box-shadow", "none", "important");
+  style.setProperty("filter", "none", "important");
+  style.setProperty("opacity", "1", "important");
+  style.setProperty("display", "block", "important");
+  style.setProperty("visibility", "visible", "important");
   document.documentElement.appendChild(marker);
   calibrationMarkers.push(marker);
+  return marker;
+}
+
+// Reads back what the browser actually rendered, so a mismatch (blocked by
+// page CSS/CSP, hidden by some global reset, etc.) is diagnosable from the
+// native console instead of just "marker not found in screenshot".
+function verifyMarker(marker, expectedRgb) {
+  const computed = getComputedStyle(marker);
+  const rect = marker.getBoundingClientRect();
+  return {
+    backgroundColor: computed.backgroundColor,
+    position: computed.position,
+    display: computed.display,
+    visibility: computed.visibility,
+    rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+    expectedRgb,
+  };
 }
 
 function handlePlaceMarkers(msg) {
   removeMarkers();
+  const verification = [];
   for (const m of msg.markers) {
-    placeMarker(m.x, m.y, m.size, m.rgb);
+    const marker = placeMarker(m.x, m.y, m.size, m.rgb);
+    verification.push(verifyMarker(marker, m.rgb));
   }
-  send({ type: "markers_placed", corrId: msg.corrId });
+  send({ type: "markers_placed", corrId: msg.corrId, verification });
 }
 
 function removeMarkers() {

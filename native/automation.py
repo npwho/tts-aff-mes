@@ -89,6 +89,11 @@ def activate_browser_window(hwnd: int | None) -> bool:
 
 
 def find_browser_hwnd(title_substring: str) -> int | None:
+    """Fallback only: matches the first top-level window whose title
+    contains the given substring. Unreliable whenever more than one window
+    matches (e.g. multiple Chrome windows) - prefer
+    current_foreground_hwnd() captured at a moment guaranteed to be the
+    right window, such as the user's first real click during recording."""
     if sys.platform != "win32":
         return None
     try:
@@ -103,6 +108,20 @@ def find_browser_hwnd(title_substring: str) -> int | None:
 
         win32gui.EnumWindows(_cb, None)
         return matches[0] if matches else None
+    except Exception:
+        return None
+
+
+def current_foreground_hwnd() -> int | None:
+    """Whatever window is actually in the foreground right now. Reliable
+    when called at a moment the caller *knows* the right window is
+    foreground (e.g. the instant a real user click was just observed)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import win32gui
+
+        return win32gui.GetForegroundWindow()
     except Exception:
         return None
 

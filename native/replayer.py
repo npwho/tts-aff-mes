@@ -67,9 +67,10 @@ class Replayer:
         """Places marker elements on the page and finds them via a real
         screenshot - pure pixel ground truth, done fresh before every
         username so a moved window can never poison a click."""
-        await self.bridge.request(
+        placed = await self.bridge.request(
             "place_calibration_markers", {"markers": CALIBRATION_MARKERS}, timeout=config.REQUEST_TIMEOUT_S
         )
+        log.info("marker verification (as actually rendered by the page): %s", placed.get("verification"))
         try:
             self._transform = await asyncio.to_thread(geometry.calibrate_via_screenshot)
         finally:

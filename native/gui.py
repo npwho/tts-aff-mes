@@ -28,6 +28,12 @@ class App(tk.Tk):
         self.loop = loop
         self.recorder = Recorder(bridge)
         self.replayer: Replayer | None = None
+        # Captured from the real foreground window at the moment of the
+        # user's first click during recording (see _start_recording) -
+        # guaranteed to be the right window, unlike guessing by title
+        # substring, which breaks whenever more than one Chrome window is
+        # open. Falls back to a title-substring guess only if recording
+        # hasn't happened yet this session.
         self.browser_hwnd = automation.find_browser_hwnd("Chrome")
 
         bridge.on("connected", lambda _m: self._set_status("connected"))
@@ -114,6 +120,14 @@ class App(tk.Tk):
 
     def _start_recording(self) -> None:
         def on_progress(count, next_label):
+            if count == 1:
+                # The user's real click that produced this event is, right
+                # now, definitely happening in the correct browser window -
+                # a much more reliable source of the window handle than
+                # guessing by title substring at app startup.
+                hwnd = automation.current_foreground_hwnd()
+                if hwnd:
+                    self.browser_hwnd = hwnd
             text = f"Captured {count}/5. Next: click the {next_label}." if next_label else "All 5 points captured - saving..."
             self.after(0, lambda: self.recording_status_label.config(text=text))
             if next_label is None:
@@ -158,9 +172,11 @@ class App(tk.Tk):
             self.after(0, lambda: self._log("Preview failed: could not bring the browser window to the foreground."))
             return
         try:
-            await self.bridge.request(
+            placed = await self.bridge.request(
                 "place_calibration_markers", {"markers": CALIBRATION_MARKERS}, timeout=config.REQUEST_TIMEOUT_S
             )
+            verification = placed.get("verification")
+            self.after(0, lambda: self._log(f"Marker verification (as actually rendered by the page): {verification}"))
             transform = await asyncio.to_thread(geometry.calibrate_via_screenshot)
         except (ConnectionError, asyncio.TimeoutError) as e:
             self.after(0, lambda: self._log(f"Preview failed: {e or e.__class__.__name__}"))
