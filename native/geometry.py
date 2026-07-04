@@ -12,10 +12,20 @@ DPI/window-metric APIs don't reflect the physical display truthfully.
 Rather than trust ANY browser-reported metric, this calibrates by placing
 two distinctly-colored marker elements on the page at known viewport
 coordinates, taking a real screenshot, and finding the markers' actual
-screen pixel positions directly. That's ground truth: whatever pyautogui
-sees in the screenshot is, by definition, in the same coordinate space
-pyautogui's own mouse-move calls use, so there is no unit-conversion
-assumption left to get wrong.
+pixel positions in that screenshot.
+
+That screenshot's pixel space is NOT automatically the same coordinate
+space pyautogui.moveTo()/click() use for real cursor movement - on the same
+Windows Server / RDP setup that broke the browser's own geometry reporting,
+GDI-based screen capture (what PIL.ImageGrab / pyautogui.screenshot() use)
+and SendInput-based cursor placement can silently operate at different
+effective resolutions (confirmed in practice: a preview image rendered by
+drawing directly on the screenshot showed circles landing correctly, but
+real clicks using those same screenshot-pixel coordinates did not land in
+the same place). So that gap is measured too, via pyautogui.size() (the
+resolution pyautogui's own mouse-move calls are expressed in) vs. the
+screenshot's actual pixel dimensions - their ratio corrects a screenshot
+pixel position into a real mouse-movable coordinate.
 """
 from __future__ import annotations
 
@@ -41,18 +51,37 @@ MARKER_COLOR_TOLERANCE = 15
 
 @dataclass
 class PixelTransform:
-    scale_x: float
-    scale_y: float
-    offset_x: float
-    offset_y: float
+    """Two affine transforms sharing the same measured viewport anchor
+    points: one lands in screenshot pixel space (for drawing previews on a
+    screenshot), the other in pyautogui's mouse-movable coordinate space
+    (for actual clicking). They are only the same when screenshot capture
+    and cursor placement happen to share a coordinate space - not something
+    to assume, per the module docstring."""
 
-    def viewport_point_to_screen(self, x: float, y: float) -> tuple[float, float]:
-        return (x * self.scale_x + self.offset_x, y * self.scale_y + self.offset_y)
+    shot_scale_x: float
+    shot_scale_y: float
+    shot_offset_x: float
+    shot_offset_y: float
+    mouse_scale_x: float
+    mouse_scale_y: float
+    mouse_offset_x: float
+    mouse_offset_y: float
 
-    def rect_to_screen(self, rect: dict) -> tuple[float, float]:
+    def viewport_point_to_mouse(self, x: float, y: float) -> tuple[float, float]:
+        return (x * self.mouse_scale_x + self.mouse_offset_x, y * self.mouse_scale_y + self.mouse_offset_y)
+
+    def rect_to_mouse(self, rect: dict) -> tuple[float, float]:
         cx = rect["x"] + rect["w"] / 2
         cy = rect["y"] + rect["h"] / 2
-        return self.viewport_point_to_screen(cx, cy)
+        return self.viewport_point_to_mouse(cx, cy)
+
+    def viewport_point_to_screenshot(self, x: float, y: float) -> tuple[float, float]:
+        return (x * self.shot_scale_x + self.shot_offset_x, y * self.shot_scale_y + self.shot_offset_y)
+
+    def rect_to_screenshot(self, rect: dict) -> tuple[float, float]:
+        cx = rect["x"] + rect["w"] / 2
+        cy = rect["y"] + rect["h"] / 2
+        return self.viewport_point_to_screenshot(cx, cy)
 
 
 def _find_color_center(arr: np.ndarray, rgb: tuple[int, int, int], tol: int = MARKER_COLOR_TOLERANCE):
@@ -65,51 +94,85 @@ def _find_color_center(arr: np.ndarray, rgb: tuple[int, int, int], tol: int = MA
     return (float(xs.mean()), float(ys.mean()))
 
 
+def _affine_2point(p1_viewport, p2_viewport, p1_target, p2_target):
+    dvx = p2_viewport[0] - p1_viewport[0]
+    dvy = p2_viewport[1] - p1_viewport[1]
+    scale_x = (p2_target[0] - p1_target[0]) / dvx
+    scale_y = (p2_target[1] - p1_target[1]) / dvy
+    offset_x = p1_target[0] - p1_viewport[0] * scale_x
+    offset_y = p1_target[1] - p1_viewport[1] * scale_y
+    return scale_x, scale_y, offset_x, offset_y
+
+
 def calibrate_via_screenshot() -> PixelTransform | None:
     """Must be called only after the extension has placed both markers and
     the browser window is confirmed foreground/visible. Returns None if
     either marker couldn't be found (e.g. hidden behind another window)."""
     screenshot = pyautogui.screenshot()
+    shot_w, shot_h = screenshot.size
     arr = np.array(screenshot)
 
-    origin_screen = _find_color_center(arr, MARKER_COLOR_ORIGIN)
-    far_screen = _find_color_center(arr, MARKER_COLOR_FAR)
-    if origin_screen is None or far_screen is None:
+    origin_shot = _find_color_center(arr, MARKER_COLOR_ORIGIN)
+    far_shot = _find_color_center(arr, MARKER_COLOR_FAR)
+    if origin_shot is None or far_shot is None:
         log.warning(
             "calibration markers not found in screenshot (origin=%s, far=%s) - "
             "is the browser window fully visible and not covered by another window?",
-            origin_screen, far_screen,
+            origin_shot, far_shot,
         )
         return None
 
     ox, oy = MARKER_VIEWPORT_ORIGIN
     fx, fy = MARKER_VIEWPORT_FAR
-    dvx, dvy = fx - ox, fy - oy
-    if dvx == 0 or dvy == 0:
+    if fx == ox or fy == oy:
         return None
 
-    scale_x = (far_screen[0] - origin_screen[0]) / dvx
-    scale_y = (far_screen[1] - origin_screen[1]) / dvy
-    offset_x = origin_screen[0] - ox * scale_x
-    offset_y = origin_screen[1] - oy * scale_y
+    # Screenshot-pixel-space transform: for drawing on a freshly-taken
+    # screenshot (the preview feature).
+    shot_scale_x, shot_scale_y, shot_offset_x, shot_offset_y = _affine_2point(
+        (ox, oy), (fx, fy), origin_shot, far_shot
+    )
 
-    transform = PixelTransform(scale_x, scale_y, offset_x, offset_y)
+    # Correct screenshot pixel positions into pyautogui's own mouse-movable
+    # coordinate space by comparing the screenshot's actual dimensions
+    # against pyautogui.size() - the resolution its own moveTo()/click()
+    # calls are expressed in. If screen capture and cursor placement happen
+    # to already share a coordinate space, this ratio is just 1.0 and
+    # changes nothing.
+    mouse_w, mouse_h = pyautogui.size()
+    corr_x = (mouse_w / shot_w) if shot_w else 1.0
+    corr_y = (mouse_h / shot_h) if shot_h else 1.0
+    origin_mouse = (origin_shot[0] * corr_x, origin_shot[1] * corr_y)
+    far_mouse = (far_shot[0] * corr_x, far_shot[1] * corr_y)
+
+    mouse_scale_x, mouse_scale_y, mouse_offset_x, mouse_offset_y = _affine_2point(
+        (ox, oy), (fx, fy), origin_mouse, far_mouse
+    )
+
+    transform = PixelTransform(
+        shot_scale_x, shot_scale_y, shot_offset_x, shot_offset_y,
+        mouse_scale_x, mouse_scale_y, mouse_offset_x, mouse_offset_y,
+    )
     log.info(
-        "calibrated via screenshot: origin_screen=%s far_screen=%s -> scale=(%.4f, %.4f) offset=(%.1f, %.1f)",
-        origin_screen, far_screen, scale_x, scale_y, offset_x, offset_y,
+        "calibrated: screenshot=%dx%d pyautogui.size=%dx%d correction=(%.4f, %.4f) | "
+        "origin_shot=%s far_shot=%s -> shot_scale=(%.4f, %.4f) mouse_scale=(%.4f, %.4f) mouse_offset=(%.1f, %.1f)",
+        shot_w, shot_h, mouse_w, mouse_h, corr_x, corr_y,
+        origin_shot, far_shot, shot_scale_x, shot_scale_y, mouse_scale_x, mouse_scale_y, mouse_offset_x, mouse_offset_y,
     )
     return transform
 
 
 def render_preview(transform: PixelTransform, steps, output_path) -> None:
     """Takes a fresh screenshot and draws a numbered marker at each step's
-    computed screen click point, so a recording can be visually confirmed
-    before ever running real OS clicks against it."""
+    click point *in screenshot pixel space*, so what you see in the saved
+    image is exactly where those pixels are in the screenshot - separate
+    from (and not necessarily equal to) the mouse-space coordinates
+    actually used to click."""
     screenshot = pyautogui.screenshot()
     draw = ImageDraw.Draw(screenshot)
     radius = 14
     for step in steps:
-        sx, sy = transform.rect_to_screen(step.rect_viewport)
+        sx, sy = transform.rect_to_screenshot(step.rect_viewport)
         draw.ellipse([sx - radius, sy - radius, sx + radius, sy + radius], outline=(255, 0, 0), width=3)
         draw.line([sx - radius, sy, sx + radius, sy], fill=(255, 0, 0), width=1)
         draw.line([sx, sy - radius, sx, sy + radius], fill=(255, 0, 0), width=1)

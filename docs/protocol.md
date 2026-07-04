@@ -78,13 +78,21 @@ So none of it is used. Instead, calibration is done via **real pixel ground trut
    Extension inserts two `position: fixed` marker `div`s at those coordinates (pure rendering, not
    a synthetic input event) and replies **`markers_placed`**.
 2. Native takes a real screenshot (`pyautogui.screenshot()`) and scans it for those exact colors
-   (`native/geometry.py`'s `calibrate_via_screenshot`). Wherever they're found *is*, by definition,
-   in the same coordinate space `pyautogui`'s own mouse-move calls use - no unit-conversion
-   assumption is left to get wrong, since nothing is being converted between coordinate systems at
-   all.
-3. The two markers' known viewport positions vs. their found screen positions solve a 2-point
-   affine transform (scale + offset), which converts any other recorded rect's center to a real
-   screen coordinate.
+   (`native/geometry.py`'s `calibrate_via_screenshot`).
+3. The two markers' known viewport positions vs. their found *screenshot pixel* positions solve a
+   2-point affine transform - but that screenshot's pixel space is **not assumed** to be the same
+   coordinate space `pyautogui.moveTo()`/`click()` use for real cursor movement. On the same
+   Windows Server / RDP setup that made the browser's own geometry reporting unreliable, GDI-based
+   screen capture and SendInput-based cursor placement were found to silently operate at different
+   effective resolutions (confirmed in practice: a preview drawn directly on a screenshot showed
+   correct marker positions, but real clicks using those same coordinates landed elsewhere). So
+   `pyautogui.size()` (the resolution `moveTo()`/`click()` are expressed in) is compared against
+   the screenshot's actual pixel dimensions, and that ratio corrects a screenshot-space position
+   into mouse-movable coordinates before the second affine transform is solved. `PixelTransform`
+   therefore exposes two conversions from the same measured anchor points:
+   `rect_to_screenshot()` (screenshot-pixel space, for drawing previews) and `rect_to_mouse()`
+   (pyautogui's own coordinate space, for actually clicking) - they are only the same when capture
+   and cursor placement happen to already share a coordinate space.
 4. Native sends **`remove_calibration_markers`** (native -> ext, fire-and-forget) to clean up.
 
 This runs fresh before every username (cheap - one screenshot plus a numpy scan), so a window
@@ -94,9 +102,11 @@ visible on screen (not covered by another window, not minimized) for the screens
 markers - `automation.activate_browser_window` is called first to bring it forward.
 
 The same mechanism renders **preview screenshots**: `geometry.render_preview` draws a numbered
-circle at every recorded step's computed screen position on a fresh screenshot, so a recording can
-be visually confirmed before ever running a real OS click against it (the GUI's "Preview
-Recording" button).
+circle at every recorded step's `rect_to_screenshot()` position on a fresh screenshot, so a
+recording can be visually confirmed before ever running a real OS click against it (the GUI's
+"Preview Recording" button). Note this only verifies the screenshot-space half of the transform -
+if clicks still land wrong despite a correct-looking preview, the screenshot/mouse-space
+correction is where to look next.
 
 ## Recording phase
 

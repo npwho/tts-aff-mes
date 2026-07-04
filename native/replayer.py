@@ -78,8 +78,8 @@ class Replayer:
         return self._transform is not None
 
     async def _screen_point(self, rect: dict) -> tuple[float, float]:
-        sx, sy = self._transform.rect_to_screen(rect)
-        log.info("rect=%s -> screen=(%.0f, %.0f)", rect, sx, sy)
+        sx, sy = self._transform.rect_to_mouse(rect)
+        log.info("rect=%s -> mouse=(%.0f, %.0f)", rect, sx, sy)
         return sx, sy
 
     async def _click_rect(self, rect: dict, jitter: bool = True) -> None:
