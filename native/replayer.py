@@ -1,11 +1,13 @@
 """Per-username replay loop (docs/protocol.md: replay phase).
 
 Clicks fixed viewport positions recorded during the Record step, converted
-to a real screen coordinate against the browser window's *current*
-geometry (see geometry.py) on every single click - no selector matching at
-all. The extension is only asked to answer "does this username exist" and
-to read back text at a point for paste/send verification, never to
-re-locate an element.
+to a real screen coordinate via a screenshot-based pixel calibration (see
+geometry.py) done fresh at the start of every username - no selector
+matching, and no trusting of self-reported browser window geometry, which
+was found to be unreliable on at least one real deployment (Windows Server
+2022 / Remote Desktop). The extension is only asked to answer "does this
+username exist", place/remove calibration markers, and read back text at a
+point for paste/send verification - never to re-locate an element.
 """
 from __future__ import annotations
 
@@ -19,6 +21,13 @@ from .models import ActionStep, CSV_HEADER, RunResult
 from .ws_server import NativeBridge
 
 log = logging.getLogger("replayer")
+
+CALIBRATION_MARKERS = [
+    {"x": geometry.MARKER_VIEWPORT_ORIGIN[0], "y": geometry.MARKER_VIEWPORT_ORIGIN[1],
+     "size": geometry.MARKER_SIZE_PX, "rgb": list(geometry.MARKER_COLOR_ORIGIN)},
+    {"x": geometry.MARKER_VIEWPORT_FAR[0], "y": geometry.MARKER_VIEWPORT_FAR[1],
+     "size": geometry.MARKER_SIZE_PX, "rgb": list(geometry.MARKER_COLOR_FAR)},
+]
 
 
 class AbortRun(Exception):
@@ -38,6 +47,7 @@ class Replayer:
         self.browser_hwnd = browser_hwnd
         self.dry_run = dry_run
         self._abort = False
+        self._transform: geometry.PixelTransform | None = None
 
         bridge.on("captcha_detected", self._on_captcha)
         bridge.on("heartbeat_lost", self._on_heartbeat_lost)
@@ -54,10 +64,22 @@ class Replayer:
         log.warning("Extension connection lost - pausing run")
         self._abort = True
 
+    async def _calibrate(self) -> bool:
+        """Places marker elements on the page and finds them via a real
+        screenshot - pure pixel ground truth, done fresh before every
+        username so a moved window can never poison a click."""
+        await self.bridge.request(
+            "place_calibration_markers", {"markers": CALIBRATION_MARKERS}, timeout=config.REQUEST_TIMEOUT_S
+        )
+        try:
+            self._transform = await asyncio.to_thread(geometry.calibrate_via_screenshot)
+        finally:
+            await self.bridge.send_fire_and_forget("remove_calibration_markers")
+        return self._transform is not None
+
     async def _screen_point(self, rect: dict) -> tuple[float, float]:
-        resp = await self.bridge.request("get_window_geometry", {}, timeout=config.REQUEST_TIMEOUT_S)
-        sx, sy = geometry.viewport_rect_to_screen(rect, resp["geometry"])
-        log.info("rect=%s geometry=%s -> screen=(%.0f, %.0f)", rect, resp["geometry"], sx, sy)
+        sx, sy = self._transform.rect_to_screen(rect)
+        log.info("rect=%s -> screen=(%.0f, %.0f)", rect, sx, sy)
         return sx, sy
 
     async def _click_rect(self, rect: dict, jitter: bool = True) -> None:
@@ -70,7 +92,8 @@ class Replayer:
         # Not foreground yet - most commonly because the user just clicked
         # Start in this tool's own window. Bring the browser forward with a
         # real click on its title bar (same as a human alt-tabbing back)
-        # rather than failing immediately.
+        # rather than failing immediately. Also required before calibrating,
+        # since the screenshot needs the browser actually visible on screen.
         return automation.activate_browser_window(self.browser_hwnd)
 
     async def _reset_state(self) -> bool:
@@ -97,6 +120,13 @@ class Replayer:
             return RunResult(
                 username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
                 timestamp_end=start, notes="browser window not in foreground",
+            )
+
+        if not await self._calibrate():
+            end = datetime.datetime.now().isoformat(timespec="seconds")
+            return RunResult(
+                username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start, timestamp_end=end,
+                notes="calibration markers not found in screenshot - is the browser window fully visible?",
             )
 
         for step in self.steps:

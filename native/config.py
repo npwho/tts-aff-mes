@@ -6,6 +6,7 @@ STORAGE_DIR = NATIVE_DIR / "storage"
 LOGS_DIR = NATIVE_DIR / "logs"
 
 ACTION_SCRIPT_PATH = STORAGE_DIR / "action_script.json"
+PREVIEW_IMAGE_PATH = STORAGE_DIR / "recording_preview.png"
 
 WS_HOST = "127.0.0.1"
 WS_PORT = 8765

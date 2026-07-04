@@ -7,17 +7,21 @@
 // tool; this script only reports what it observes (element existence,
 // position, text) and passively listens to real, user-driven events.
 //
-// There is no selector matching here at all: the native tool clicks fixed
-// viewport positions recorded during the Record step (re-anchored live
-// against the browser window's current on-screen geometry - see
-// geometry.py). This script's only remaining jobs are: report that
-// geometry, report whether a searched username actually exists, read back
-// text at a point for paste/send verification, and watch for captchas/open
-// dialogs. TikTok's generated/state-dependent class names made selector-based
-// re-location unreliable in practice, so replay doesn't depend on it at all.
+// There is no selector matching here at all, and no trusting of
+// self-reported window geometry either (window.screenX/outerWidth/
+// innerWidth/devicePixelRatio were observed to be internally inconsistent
+// on Windows Server / Remote Desktop - innerWidth larger than outerWidth,
+// which is physically impossible). The native tool instead determines real
+// screen coordinates by taking an actual screenshot and finding two
+// distinctly-colored marker elements this script places on request - pure
+// pixel ground truth, no metric-trusting involved. This script's only
+// remaining jobs: place/remove those markers, report whether a searched
+// username actually exists, read back text at a point for paste/send
+// verification, and watch for captchas/open dialogs.
 
 let mode = "idle"; // idle | recording | replaying
 let captchaObserver = null;
+let calibrationMarkers = [];
 
 function send(msg) {
   chrome.runtime.sendMessage(msg).catch(() => {});
@@ -32,22 +36,45 @@ function rectOf(el) {
   return { x: r.x, y: r.y, w: r.width, h: r.height };
 }
 
-// Snapshot of the current browser window's OS-level geometry, used by the
-// native tool to convert a recorded viewport-relative rect into a real
-// screen coordinate fresh on every single click. That also means a window
-// that gets moved mid-run is handled automatically.
-function windowGeometry() {
-  return {
-    screenX: window.screenX,
-    screenY: window.screenY,
-    outerWidth: window.outerWidth,
-    outerHeight: window.outerHeight,
-    innerWidth: window.innerWidth,
-    innerHeight: window.innerHeight,
-    devicePixelRatio: window.devicePixelRatio || 1,
-    screenWidth: window.screen.width,
-    screenHeight: window.screen.height,
-  };
+// ---- Calibration markers (pixel ground truth) -------------------------------
+
+function placeMarker(x, y, size, rgb) {
+  const marker = document.createElement("div");
+  marker.setAttribute("data-tts-aff-mes-marker", "true");
+  marker.style.cssText = [
+    "position:fixed",
+    `left:${x}px`,
+    `top:${y}px`,
+    `width:${size}px`,
+    `height:${size}px`,
+    `background:rgb(${rgb[0]},${rgb[1]},${rgb[2]})`,
+    "z-index:2147483647",
+    "pointer-events:none",
+    "border:none",
+    "border-radius:0",
+    "box-shadow:none",
+    "filter:none",
+    "opacity:1",
+  ].join(";");
+  document.documentElement.appendChild(marker);
+  calibrationMarkers.push(marker);
+}
+
+function handlePlaceMarkers(msg) {
+  removeMarkers();
+  for (const m of msg.markers) {
+    placeMarker(m.x, m.y, m.size, m.rgb);
+  }
+  send({ type: "markers_placed", corrId: msg.corrId });
+}
+
+function removeMarkers() {
+  calibrationMarkers.forEach((m) => m.remove());
+  calibrationMarkers = [];
+}
+
+function handleRemoveMarkers() {
+  removeMarkers();
 }
 
 // ---- Captcha watch (unsolicited, always on) --------------------------------
@@ -133,11 +160,7 @@ function stopRecording() {
   document.removeEventListener("paste", recordingPasteHandler, { capture: true });
 }
 
-// ---- Replay support: geometry / username existence / text-at-point / reset --
-
-function handleGetWindowGeometry(msg) {
-  send({ type: "window_geometry_result", corrId: msg.corrId, geometry: windowGeometry() });
-}
+// ---- Replay support: username existence / text-at-point / reset -----------
 
 function findSearchResultRow(username) {
   const rows = Array.from(
@@ -200,8 +223,11 @@ chrome.runtime.onMessage.addListener((msg) => {
     case "stop_recording":
       stopRecording();
       break;
-    case "get_window_geometry":
-      handleGetWindowGeometry(msg);
+    case "place_calibration_markers":
+      handlePlaceMarkers(msg);
+      break;
+    case "remove_calibration_markers":
+      handleRemoveMarkers();
       break;
     case "check_username_exists":
       handleCheckUsernameExists(msg);

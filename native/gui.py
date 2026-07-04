@@ -8,12 +8,13 @@ from that thread goes through `self.after(0, ...)` to stay on the Tk thread.
 from __future__ import annotations
 
 import asyncio
+import os
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
-from . import automation, config
+from . import automation, config, geometry
 from .recorder import Recorder
-from .replayer import Replayer
+from .replayer import Replayer, CALIBRATION_MARKERS
 from .ws_server import NativeBridge
 
 
@@ -50,6 +51,8 @@ class App(tk.Tk):
         self.btn_record_start.pack(side="left", padx=4, pady=4)
         self.btn_record_stop = tk.Button(rec_frame, text="Stop Recording && Save", command=self._stop_recording, state="disabled")
         self.btn_record_stop.pack(side="left", padx=4, pady=4)
+        self.btn_preview = tk.Button(rec_frame, text="Preview Recording (screenshot)", command=self._preview_recording)
+        self.btn_preview.pack(side="left", padx=4, pady=4)
 
         input_frame = tk.LabelFrame(self, text="2. Replay (remaining usernames)")
         input_frame.pack(fill="both", expand=True, padx=8, pady=4)
@@ -117,6 +120,43 @@ class App(tk.Tk):
             self.btn_record_stop.config(state="disabled"),
             self._log("Recording saved:\n" + summary),
         ))
+
+    def _preview_recording(self) -> None:
+        steps = Recorder.load()
+        if not steps:
+            messagebox.showerror("No recording", "Record the first creator's flow first.")
+            return
+        self._log("Calibrating and rendering preview screenshot...")
+        self._run_async(self._do_preview(steps))
+
+    async def _do_preview(self, steps) -> None:
+        if not automation.activate_browser_window(self.browser_hwnd):
+            self.after(0, lambda: self._log("Preview failed: could not bring the browser window to the foreground."))
+            return
+        try:
+            await self.bridge.request(
+                "place_calibration_markers", {"markers": CALIBRATION_MARKERS}, timeout=config.REQUEST_TIMEOUT_S
+            )
+            transform = await asyncio.to_thread(geometry.calibrate_via_screenshot)
+        except (ConnectionError, asyncio.TimeoutError) as e:
+            self.after(0, lambda: self._log(f"Preview failed: {e or e.__class__.__name__}"))
+            return
+        finally:
+            await self.bridge.send_fire_and_forget("remove_calibration_markers")
+
+        if transform is None:
+            self.after(0, lambda: self._log(
+                "Preview failed: calibration markers not found in the screenshot - "
+                "is the browser window fully visible and not covered by another window?"
+            ))
+            return
+
+        await asyncio.to_thread(geometry.render_preview, transform, steps, config.PREVIEW_IMAGE_PATH)
+        try:
+            os.startfile(config.PREVIEW_IMAGE_PATH)
+        except Exception:
+            pass
+        self.after(0, lambda: self._log(f"Preview saved and opened: {config.PREVIEW_IMAGE_PATH}"))
 
     # ---- replay -------------------------------------------------------------
 

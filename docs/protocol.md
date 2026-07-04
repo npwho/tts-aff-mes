@@ -16,10 +16,10 @@ input (pyautogui/pynput).
 selector on every replay. That broke repeatedly against TikTok's generated/state-dependent class
 names (e.g. a class that only exists while a tooltip happens to be showing). Positions inside
 TikTok's messaging dialog are stable once it's open, so replay instead clicks fixed viewport
-positions recorded once during the Record step, converted to a real screen coordinate against the
-browser window's *current* geometry. The extension's only remaining jobs during replay are:
-report that geometry, report whether a searched username exists, read back text at a point, and
-watch for captchas/open dialogs.
+positions recorded once during the Record step, converted to a real screen coordinate via a
+screenshot-based pixel calibration (see below). The extension's only remaining jobs during replay
+are: place/remove calibration marker elements, report whether a searched username exists, read
+back text at a point, and watch for captchas/open dialogs.
 
 ## Handshake
 
@@ -52,43 +52,51 @@ Native response: immediately pause the whole run (not just skip one username) an
 
 **`error`** (either direction) — anything unexpected.
 ```json
-{"type": "error", "context": "get_window_geometry", "message": "..."}
+{"type": "error", "context": "place_calibration_markers", "message": "..."}
 ```
 
-## Coordinate conversion (no calibration step)
+## Coordinate conversion: screenshot-based pixel calibration
 
-There is no separate calibration phase. `get_window_geometry` returns a snapshot of the browser
-window's OS-level geometry:
-```json
-{
-  "type": "window_geometry_result",
-  "corrId": "g-1",
-  "geometry": {
-    "screenX": 40, "screenY": 30,
-    "outerWidth": 1536, "outerHeight": 864,
-    "innerWidth": 1520, "innerHeight": 780,
-    "devicePixelRatio": 1.5,
-    "screenWidth": 1536, "screenHeight": 864
-  }
-}
-```
-`native/geometry.py`'s `viewport_rect_to_screen(rect, geometry)` converts a *recorded* rect's
-center to a real screen coordinate:
-```
-chrome_top = outerHeight - innerHeight   # height of tabs/address bar above the page viewport
-scale      = pyautogui.size().width / geometry.screenWidth   # measured, not devicePixelRatio
-screen_x   = (screenX + rect.center_x) * scale
-screen_y   = (screenY + chrome_top + rect.center_y) * scale
-```
-The scale factor is *measured* (pyautogui's own reported screen size vs. the browser's reported
-screen size) rather than trusting `devicePixelRatio` directly, since that assumes the native
-process's DPI-awareness call actually took effect - which Windows won't guarantee (only one
-DPI-awareness mode can ever be set per process, and Python's own bundled manifest can silently
-lock one in before the app's own call runs). Measuring the actual ratio is correct either way.
+Chrome's self-reported window geometry (`window.screenX`, `outerWidth`/`outerHeight`,
+`innerWidth`/`innerHeight`, `devicePixelRatio`) was found to be internally inconsistent on at
+least one real deployment target (Windows Server 2022): `innerWidth` was observed *larger* than
+`outerWidth`, which is physically impossible for a real window, and `devicePixelRatio` was
+reported as `0.8`, an abnormal value. This is a known category of problem with Remote Desktop /
+virtualized-display Windows sessions, where per-app DPI/window-metric APIs don't reflect the
+physical display truthfully. No formula built on that data can work reliably.
 
-This is recomputed fresh on every single click, so a window that moves mid-run is handled
-automatically. Resizing or changing browser zoom between recording and replay is not handled -
-re-record if you do either.
+So none of it is used. Instead, calibration is done via **real pixel ground truth**:
+
+1. Native sends **`place_calibration_markers`** (native -> ext) with two distinctly-colored
+   squares to render at known viewport points:
+   ```json
+   {"type": "place_calibration_markers", "corrId": "m-1", "markers": [
+     {"x": 20, "y": 20, "size": 40, "rgb": [255, 0, 255]},
+     {"x": 520, "y": 520, "size": 40, "rgb": [0, 255, 255]}
+   ]}
+   ```
+   Extension inserts two `position: fixed` marker `div`s at those coordinates (pure rendering, not
+   a synthetic input event) and replies **`markers_placed`**.
+2. Native takes a real screenshot (`pyautogui.screenshot()`) and scans it for those exact colors
+   (`native/geometry.py`'s `calibrate_via_screenshot`). Wherever they're found *is*, by definition,
+   in the same coordinate space `pyautogui`'s own mouse-move calls use - no unit-conversion
+   assumption is left to get wrong, since nothing is being converted between coordinate systems at
+   all.
+3. The two markers' known viewport positions vs. their found screen positions solve a 2-point
+   affine transform (scale + offset), which converts any other recorded rect's center to a real
+   screen coordinate.
+4. Native sends **`remove_calibration_markers`** (native -> ext, fire-and-forget) to clean up.
+
+This runs fresh before every username (cheap - one screenshot plus a numpy scan), so a window
+that gets moved mid-run is handled automatically. Resizing or changing browser zoom between
+recording and replay is not handled - re-record if you do either. The browser window must be
+visible on screen (not covered by another window, not minimized) for the screenshot to find the
+markers - `automation.activate_browser_window` is called first to bring it forward.
+
+The same mechanism renders **preview screenshots**: `geometry.render_preview` draws a numbered
+circle at every recorded step's computed screen position on a fresh screenshot, so a recording can
+be visually confirmed before ever running a real OS click against it (the GUI's "Preview
+Recording" button).
 
 ## Recording phase
 
@@ -123,11 +131,8 @@ Native's recorder tags certain observed events specially when serializing to
 
 ## Replay phase (per username)
 
-**`get_window_geometry`** (native -> ext) — see Coordinate conversion above. Called before every
-click.
-```json
-{"type": "get_window_geometry", "corrId": "g-1"}
-```
+Calibration (`place_calibration_markers` / `markers_placed` / `remove_calibration_markers`, see
+above) runs once at the start of every username, before any clicks for that username.
 
 **`check_username_exists`** (native -> ext) — called after pasting a username into the search box.
 ```json

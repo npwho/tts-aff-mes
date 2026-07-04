@@ -18,8 +18,9 @@ generated/state-dependent class names made re-locating elements by selector
 unreliable in practice (a class can exist only while a tooltip happens to be
 showing, or only while an input is focused). Instead, the native tool clicks
 *fixed viewport positions* recorded once during the Record step, converted to
-a real screen coordinate against the browser window's live on-screen position
-every single time. The extension's only job during replay is answering "does
+a real screen coordinate via a screenshot-based pixel calibration (see
+below) - not by trusting anything the browser self-reports about its own
+window geometry. The extension's only job during replay is answering "does
 this username exist" and reading back text at a point to verify a
 paste/send — never "where is this element now."
 
@@ -41,12 +42,19 @@ plan file this was built from for the design rationale.
    python -m native.main
    ```
 
-There's no manual calibration step either: the extension reports the browser
-window's actual on-screen geometry alongside the request, and the native
-side *measures* (rather than assumes) the scale between its own coordinate
-space and the browser's, so it's correct even if Windows' per-process DPI
-awareness didn't take effect the way you'd expect. Moving the browser window
-mid-run is handled automatically, since geometry is re-fetched on every click.
+There's no manual calibration step, but there is an *automatic* one, done
+fresh before every username: the extension places two distinctly-colored
+marker squares at known page positions, the native tool takes a real
+screenshot and finds them by their exact color, and the two markers' known
+vs. found positions solve the coordinate transform. This was built after
+discovering that Chrome's self-reported window geometry
+(`window.screenX`/`outerWidth`/`innerWidth`/`devicePixelRatio`) is
+internally inconsistent on Windows Server / Remote Desktop sessions — no
+formula built on that data could ever be reliable there, so nothing here
+trusts it. Moving the browser window mid-run is handled automatically, since
+calibration re-runs every time. Only requirement: the browser window has to
+actually be visible on screen (not minimized, not covered by another window)
+when a click or calibration happens.
 
 ## Usage (run in this order every session)
 
@@ -58,6 +66,11 @@ mid-run is handled automatically, since geometry is re-fetched on every click.
    you click/focus/paste on each element; click "Stop Recording & Save" as
    soon as you've pasted into the message box. Nothing is sent to that
    creator unless you choose to press Enter yourself.
+   - Click **"Preview Recording (screenshot)"** afterwards — it calibrates,
+     takes a real screenshot, and draws a numbered red circle at exactly
+     where each recorded step will click. The image opens automatically
+     (`native/storage/recording_preview.png`). Check every circle actually
+     lands on the button/input you clicked before trusting a replay run.
 2. **Replay** — paste the remaining usernames (one per line) and the message
    into the tool, click Start. Each username is looked up fresh; if no
    search result exists (username doesn't exist), it's logged
