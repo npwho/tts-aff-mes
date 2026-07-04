@@ -35,10 +35,11 @@ plan file this was built from for the design rationale.
 
 1. **Calibrate** — open the TikTok Shop messaging page, click "Start
    Calibration" in the tool. Two red markers appear on the page one at a
-   time; for each, hover your *real* mouse over the marker and click the
-   corresponding "Capture Point" button in the tool. This solves for the
-   viewport-to-screen coordinate transform (handles zoom/DPI automatically).
-   Re-run this if you move/resize the browser window or change zoom.
+   time; for each, hover your *real* mouse over the marker (don't click
+   anything) and press **F8** on the keyboard to capture that point without
+   moving the cursor off the marker. This solves for the viewport-to-screen
+   coordinate transform (handles zoom/DPI automatically). Re-run this if you
+   move/resize the browser window or change zoom.
 2. **Record** — click "Start Recording", then manually perform the entire
    flow yourself on the very first creator: click "New message", search the
    username, hover the result row, click the revealed "Chat" button, click

@@ -12,6 +12,8 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
+from pynput import keyboard as pkeyboard
+
 from . import automation, calibration, config
 from .models import CalibrationTransform
 from .recorder import Recorder
@@ -32,7 +34,12 @@ class App(tk.Tk):
         self.transform: CalibrationTransform | None = calibration.load_calibration()
         self._cal_point1 = None
         self._cal_point2_viewport = None
+        self._capture_armed: int | None = None
         self.browser_hwnd = automation.find_browser_hwnd("Chrome")
+
+        self._kb_listener = pkeyboard.Listener(on_press=self._on_key_press)
+        self._kb_listener.daemon = True
+        self._kb_listener.start()
 
         bridge.on("connected", lambda _m: self._set_status("connected"))
         bridge.on("disconnected", lambda _m: self._set_status("disconnected"))
@@ -53,10 +60,8 @@ class App(tk.Tk):
         cal_frame.pack(fill="x", padx=8, pady=4)
         self.btn_calibrate = tk.Button(cal_frame, text="Start Calibration", command=self._start_calibration)
         self.btn_calibrate.pack(side="left", padx=4, pady=4)
-        self.btn_capture1 = tk.Button(cal_frame, text="Capture Point 1 (hover marker, then click)", command=self._capture_point1, state="disabled")
-        self.btn_capture1.pack(side="left", padx=4, pady=4)
-        self.btn_capture2 = tk.Button(cal_frame, text="Capture Point 2 (hover marker, then click)", command=self._capture_point2, state="disabled")
-        self.btn_capture2.pack(side="left", padx=4, pady=4)
+        self.cal_hint_label = tk.Label(cal_frame, text="", fg="blue")
+        self.cal_hint_label.pack(side="left", padx=8)
 
         rec_frame = tk.LabelFrame(self, text="2. Record (perform the flow yourself on the first creator)")
         rec_frame.pack(fill="x", padx=8, pady=4)
@@ -113,6 +118,11 @@ class App(tk.Tk):
         ))
 
     # ---- calibration ---------------------------------------------------------
+    #
+    # Capture is done via a global F8 hotkey, not a GUI button: clicking a
+    # button would require moving the real mouse cursor off the on-page
+    # marker and onto the button first, which would capture the wrong
+    # position. F8 lets you capture while the cursor is still on the marker.
 
     def _start_calibration(self) -> None:
         self._run_async(self._calibration_point(1, 50, 50))
@@ -126,34 +136,49 @@ class App(tk.Tk):
             return
         if point_id == 1:
             self._cal_marker1 = resp
-            self.after(0, lambda: (self._log("Point 1 marker placed (top-left). Hover your real mouse over it, then click 'Capture Point 1'."), self.btn_capture1.config(state="normal")))
+            hint = "Point 1 marker placed (top-left). Hover your real mouse over it, then press F8."
         else:
             self._cal_marker2 = resp
-            self.after(0, lambda: (self._log("Point 2 marker placed (bottom-right). Hover your real mouse over it, then click 'Capture Point 2'."), self.btn_capture2.config(state="normal")))
+            hint = "Point 2 marker placed (bottom-right). Hover your real mouse over it, then press F8."
 
-    def _capture_point1(self) -> None:
-        sx, sy = automation.current_screen_position()
-        self._cal_point1 = calibration.CalibrationPoint(50, 50, sx, sy)
-        self.btn_capture1.config(state="disabled")
-        vx = self._cal_marker1["windowInnerWidth"] - 50
-        vy = self._cal_marker1["windowInnerHeight"] - 50
-        self._cal_point2_viewport = (vx, vy)
-        self._run_async(self._calibration_point(2, vx, vy))
+        def _arm():
+            self._log(hint)
+            self.cal_hint_label.config(text=hint)
+            self._capture_armed = point_id
 
-    def _capture_point2(self) -> None:
-        sx, sy = automation.current_screen_position()
-        vx, vy = self._cal_point2_viewport
-        p2 = calibration.CalibrationPoint(vx, vy, sx, sy)
-        try:
-            transform = calibration.compute_transform(self._cal_point1, p2)
-        except ValueError as e:
-            self._log(f"Calibration failed: {e}")
+        self.after(0, _arm)
+
+    def _on_key_press(self, key) -> None:
+        # Runs on pynput's own listener thread - only read a thread-safe
+        # value (mouse position) here, then hand off to the Tk thread.
+        if key != pkeyboard.Key.f8 or self._capture_armed is None:
             return
-        calibration.save_calibration(transform)
-        self.transform = transform
-        self.btn_capture2.config(state="disabled")
-        self._log(f"Calibration saved: scale=({transform.scale_x:.3f}, {transform.scale_y:.3f}) offset=({transform.offset_x:.1f}, {transform.offset_y:.1f})")
-        self._run_async(self.bridge.send_fire_and_forget("calibration_complete", {"transform": transform.to_dict()}))
+        point_id = self._capture_armed
+        self._capture_armed = None
+        sx, sy = automation.current_screen_position()
+        self.after(0, lambda: self._handle_capture(point_id, sx, sy))
+
+    def _handle_capture(self, point_id: int, sx: int, sy: int) -> None:
+        self.cal_hint_label.config(text="")
+        if point_id == 1:
+            self._cal_point1 = calibration.CalibrationPoint(50, 50, sx, sy)
+            vx = self._cal_marker1["windowInnerWidth"] - 50
+            vy = self._cal_marker1["windowInnerHeight"] - 50
+            self._cal_point2_viewport = (vx, vy)
+            self._log(f"Point 1 captured at screen ({sx}, {sy}).")
+            self._run_async(self._calibration_point(2, vx, vy))
+        else:
+            vx, vy = self._cal_point2_viewport
+            p2 = calibration.CalibrationPoint(vx, vy, sx, sy)
+            try:
+                transform = calibration.compute_transform(self._cal_point1, p2)
+            except ValueError as e:
+                self._log(f"Calibration failed: {e}")
+                return
+            calibration.save_calibration(transform)
+            self.transform = transform
+            self._log(f"Calibration saved: scale=({transform.scale_x:.3f}, {transform.scale_y:.3f}) offset=({transform.offset_x:.1f}, {transform.offset_y:.1f})")
+            self._run_async(self.bridge.send_fire_and_forget("calibration_complete", {"transform": transform.to_dict()}))
 
     # ---- recording -------------------------------------------------------------
 
