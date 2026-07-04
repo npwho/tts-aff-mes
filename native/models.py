@@ -21,7 +21,19 @@ class SelectorDescriptor:
     ancestor_path: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        # Wire format is camelCase (matches every other field in the protocol
+        # and what extension/content.js's resolveSelectorDescriptor reads:
+        # desc.textContent / desc.ancestorPath). Using dataclasses.asdict()
+        # here would emit the Python-side snake_case field names instead,
+        # which the extension silently treats as undefined - breaking the
+        # text-match and structural fallback strategies on replay.
+        return {
+            "strategy": self.strategy,
+            "value": self.value,
+            "attributes": self.attributes,
+            "textContent": self.text_content,
+            "ancestorPath": self.ancestor_path,
+        }
 
     @staticmethod
     def from_dict(d: dict) -> "SelectorDescriptor":
