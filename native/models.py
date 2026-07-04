@@ -19,6 +19,7 @@ class SelectorDescriptor:
     attributes: dict = field(default_factory=dict)
     text_content: Optional[str] = None
     ancestor_path: Optional[str] = None
+    hint_rect: Optional[dict] = None
 
     def to_dict(self) -> dict:
         # Wire format is camelCase (matches every other field in the protocol
@@ -33,6 +34,7 @@ class SelectorDescriptor:
             "attributes": self.attributes,
             "textContent": self.text_content,
             "ancestorPath": self.ancestor_path,
+            "hintRect": self.hint_rect,
         }
 
     @staticmethod
@@ -43,6 +45,7 @@ class SelectorDescriptor:
             attributes=d.get("attributes", {}),
             text_content=d.get("textContent") or d.get("text_content"),
             ancestor_path=d.get("ancestorPath") or d.get("ancestor_path"),
+            hint_rect=d.get("hintRect") or d.get("hint_rect"),
         )
 
 
