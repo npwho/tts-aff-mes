@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+native/logs/
+native/storage/*.json
+.claude/

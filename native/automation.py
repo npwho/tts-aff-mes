@@ -1,0 +1,148 @@
+"""Real OS-level mouse/keyboard input wrappers.
+
+Everything in this module performs genuine OS input (Windows SendInput via
+pyautogui/pynput) - nothing here talks to the browser DOM. The extension
+never sees any of this; it only observes the resulting page state.
+"""
+from __future__ import annotations
+
+import random
+import sys
+import time
+
+import pyautogui
+import pyperclip
+from pynput.keyboard import Controller as KeyboardController, Key
+
+from . import config
+
+_keyboard = KeyboardController()
+
+pyautogui.FAILSAFE = True
+pyautogui.PAUSE = 0
+
+
+def ensure_dpi_awareness() -> None:
+    """Must be called once, at process start, before any pyautogui call.
+
+    Without this, Windows can silently rescale coordinates under display
+    scaling, making calibration inconsistent between runs.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            import ctypes
+
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def is_browser_foreground(expected_hwnd: int | None) -> bool:
+    """Best-effort foreground-window check. Returns True if we can't check
+    (non-Windows) so callers don't hard-fail in that case."""
+    if sys.platform != "win32" or expected_hwnd is None:
+        return True
+    try:
+        import win32gui
+
+        return win32gui.GetForegroundWindow() == expected_hwnd
+    except Exception:
+        return True
+
+
+def find_browser_hwnd(title_substring: str) -> int | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        import win32gui
+
+        matches = []
+
+        def _cb(hwnd, _):
+            title = win32gui.GetWindowText(hwnd)
+            if title_substring.lower() in title.lower():
+                matches.append(hwnd)
+
+        win32gui.EnumWindows(_cb, None)
+        return matches[0] if matches else None
+    except Exception:
+        return None
+
+
+def _jittered(x: float, y: float, jitter_px: int = config.CLICK_JITTER_PX) -> tuple[int, int]:
+    return (
+        int(x + random.uniform(-jitter_px, jitter_px)),
+        int(y + random.uniform(-jitter_px, jitter_px)),
+    )
+
+
+def move_to(x: float, y: float, jitter: bool = True) -> None:
+    tx, ty = _jittered(x, y) if jitter else (int(x), int(y))
+    duration = random.uniform(config.MOUSE_MOVE_MIN_DURATION_S, config.MOUSE_MOVE_MAX_DURATION_S)
+    pyautogui.moveTo(tx, ty, duration=duration)
+
+
+def click(x: float, y: float, jitter: bool = True) -> None:
+    move_to(x, y, jitter=jitter)
+    time.sleep(random.uniform(config.PRE_CLICK_PAUSE_MIN_S, config.PRE_CLICK_PAUSE_MAX_S))
+    pyautogui.click()
+
+
+def hover_settle() -> None:
+    time.sleep(random.uniform(config.HOVER_SETTLE_MIN_S, config.HOVER_SETTLE_MAX_S))
+
+
+def paste_text(text: str) -> None:
+    """Set the OS clipboard and send a single real Ctrl+V chord.
+
+    Deliberately never types character-by-character: that would risk a stray
+    Enter mid-multiline-message and looks more scripted than a real paste.
+    """
+    prior_clipboard = None
+    try:
+        prior_clipboard = pyperclip.paste()
+    except Exception:
+        pass
+
+    pyperclip.copy(text)
+    time.sleep(0.05)
+    with _keyboard.pressed(Key.ctrl):
+        _keyboard.press("v")
+        _keyboard.release("v")
+    time.sleep(0.15)
+
+    if prior_clipboard is not None:
+        try:
+            pyperclip.copy(prior_clipboard)
+        except Exception:
+            pass
+
+
+def press_enter() -> None:
+    _keyboard.press(Key.enter)
+    _keyboard.release(Key.enter)
+
+
+def press_escape() -> None:
+    _keyboard.press(Key.esc)
+    _keyboard.release(Key.esc)
+
+
+def current_screen_position() -> tuple[int, int]:
+    pos = pyautogui.position()
+    return (pos.x, pos.y)
+
+
+def maybe_human_break(username_index: int) -> None:
+    if username_index > 0 and username_index % config.HUMAN_BREAK_EVERY_N == 0:
+        time.sleep(random.uniform(config.HUMAN_BREAK_MIN_S, config.HUMAN_BREAK_MAX_S))
+
+
+def between_username_delay() -> None:
+    time.sleep(random.uniform(config.MIN_DELAY_BETWEEN_USERNAMES_S, config.MAX_DELAY_BETWEEN_USERNAMES_S))
