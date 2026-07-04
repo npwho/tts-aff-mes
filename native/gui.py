@@ -130,9 +130,17 @@ class App(tk.Tk):
     async def _calibration_point(self, point_id: int, vx: int, vy: int) -> None:
         try:
             resp = await self.bridge.request("calibration_request_point", {"pointId": point_id, "viewportX": vx, "viewportY": vy})
-        except (ConnectionError, asyncio.TimeoutError) as e:
-            error_text = str(e) or e.__class__.__name__
+        except ConnectionError as e:
+            error_text = str(e) or "extension not connected"
             self.after(0, lambda: self._log(f"Calibration failed: {error_text}"))
+            return
+        except asyncio.TimeoutError:
+            self.after(0, lambda: self._log(
+                "Calibration failed: no response from the extension within 5s. "
+                "The TikTok Shop tab's content script isn't answering - make sure that tab "
+                "is open and was refreshed since the extension was last (re)loaded, and that "
+                "it was the active/focused tab when you clicked Start Calibration."
+            ))
             return
         if point_id == 1:
             self._cal_marker1 = resp
