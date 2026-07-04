@@ -6,6 +6,7 @@ never sees any of this; it only observes the resulting page state.
 """
 from __future__ import annotations
 
+import logging
 import random
 import sys
 import time
@@ -15,6 +16,8 @@ import pyperclip
 from pynput.keyboard import Controller as KeyboardController, Key
 
 from . import config
+
+log = logging.getLogger("automation")
 
 _keyboard = KeyboardController()
 
@@ -115,6 +118,13 @@ def move_to(x: float, y: float, jitter: bool = True) -> None:
     tx, ty = _jittered(x, y) if jitter else (int(x), int(y))
     duration = random.uniform(config.MOUSE_MOVE_MIN_DURATION_S, config.MOUSE_MOVE_MAX_DURATION_S)
     pyautogui.moveTo(tx, ty, duration=duration)
+    actual = pyautogui.position()
+    if abs(actual.x - tx) > 3 or abs(actual.y - ty) > 3:
+        log.warning(
+            "cursor landed at (%s, %s) but was told to go to (%s, %s) - "
+            "possible DPI/multi-monitor coordinate mismatch",
+            actual.x, actual.y, tx, ty,
+        )
 
 
 def click(x: float, y: float, jitter: bool = True) -> None:

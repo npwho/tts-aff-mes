@@ -63,6 +63,10 @@ class Replayer:
         if not result.get("found"):
             return False
         sx, sy = geometry.viewport_rect_to_screen(result["rectViewport"], result["windowGeometry"])
+        log.info(
+            "step %s (%s): rect=%s geometry=%s -> screen=(%.0f, %.0f)",
+            step.step_id, step.kind, result["rectViewport"], result["windowGeometry"], sx, sy,
+        )
         automation.click(sx, sy)
         return True
 
@@ -126,6 +130,10 @@ class Replayer:
                     )
                 rect = search.get("exactMatchRect") or search.get("rectViewport")
                 self._last_row_rect_screen = geometry.viewport_rect_to_screen(rect, search["windowGeometry"])
+                log.info(
+                    "search result row: rect=%s geometry=%s -> screen=%s",
+                    rect, search["windowGeometry"], self._last_row_rect_screen,
+                )
 
             elif step.kind == "HOVER_THEN_CLICK":
                 if self._last_row_rect_screen is None:
@@ -146,6 +154,10 @@ class Replayer:
                         timestamp_end=end, notes="Chat button not revealed after hover",
                     )
                 sx, sy = geometry.viewport_rect_to_screen(result["rectViewport"], result["windowGeometry"])
+                log.info(
+                    "Chat button: rect=%s geometry=%s -> screen=(%.0f, %.0f)",
+                    result["rectViewport"], result["windowGeometry"], sx, sy,
+                )
                 automation.click(sx, sy, jitter=True)
 
             elif step.kind == "PASTE_MULTILINE_THEN_ENTER":

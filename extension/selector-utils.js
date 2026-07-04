@@ -69,6 +69,11 @@ function windowGeometry() {
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
     devicePixelRatio: window.devicePixelRatio || 1,
+    // Full screen resolution in CSS px, used on the native side to measure
+    // the real scale factor between pyautogui's coordinate space and the
+    // browser's, instead of trusting devicePixelRatio blindly.
+    screenWidth: window.screen.width,
+    screenHeight: window.screen.height,
   };
 }
 
