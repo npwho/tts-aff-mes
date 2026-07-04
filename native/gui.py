@@ -22,7 +22,7 @@ class App(tk.Tk):
     def __init__(self, bridge: NativeBridge, loop: asyncio.AbstractEventLoop) -> None:
         super().__init__()
         self.title("TikTok Shop Bulk Creator Messenger")
-        self.geometry("720x600")
+        self.geometry("720x620")
 
         self.bridge = bridge
         self.loop = loop
@@ -36,6 +36,7 @@ class App(tk.Tk):
 
         self._build_widgets()
         self._set_status("waiting for extension...")
+        self._refresh_recording_status()
 
     # ---- widget layout -----------------------------------------------------
 
@@ -45,14 +46,16 @@ class App(tk.Tk):
         self.status_label = tk.Label(top, text="", fg="gray")
         self.status_label.pack(side="left")
 
-        rec_frame = tk.LabelFrame(self, text="1. Record (perform the flow yourself on the first creator)")
+        rec_frame = tk.LabelFrame(self, text="1. Record (5 clicks, one per prompt)")
         rec_frame.pack(fill="x", padx=8, pady=4)
         self.btn_record_start = tk.Button(rec_frame, text="Start Recording", command=self._start_recording)
         self.btn_record_start.pack(side="left", padx=4, pady=4)
-        self.btn_record_stop = tk.Button(rec_frame, text="Stop Recording && Save", command=self._stop_recording, state="disabled")
-        self.btn_record_stop.pack(side="left", padx=4, pady=4)
+        self.btn_record_cancel = tk.Button(rec_frame, text="Cancel", command=self._cancel_recording, state="disabled")
+        self.btn_record_cancel.pack(side="left", padx=4, pady=4)
         self.btn_preview = tk.Button(rec_frame, text="Preview Recording (screenshot)", command=self._preview_recording)
         self.btn_preview.pack(side="left", padx=4, pady=4)
+        self.recording_status_label = tk.Label(rec_frame, text="", fg="blue")
+        self.recording_status_label.pack(side="left", padx=8)
 
         input_frame = tk.LabelFrame(self, text="2. Replay (remaining usernames)")
         input_frame.pack(fill="both", expand=True, padx=8, pady=4)
@@ -73,7 +76,9 @@ class App(tk.Tk):
         self.btn_stop.pack(side="left", padx=4)
         self.dry_run_var = tk.BooleanVar(value=False)
         self.chk_dry_run = tk.Checkbutton(
-            btn_row, text="Dry run (click through, don't paste/send message)", variable=self.dry_run_var
+            btn_row,
+            text="Dry run (first username only, leaves message empty, still clicks Send)",
+            variable=self.dry_run_var,
         )
         self.chk_dry_run.pack(side="left", padx=12)
 
@@ -101,35 +106,54 @@ class App(tk.Tk):
             "Captcha detected", "TikTok showed a captcha. The run has been paused - solve it manually, then restart."
         ))
 
+    def _refresh_recording_status(self) -> None:
+        flow = Recorder.load()
+        self.recording_status_label.config(text="Recording saved." if flow else "No recording yet.")
+
     # ---- recording -------------------------------------------------------------
 
     def _start_recording(self) -> None:
-        self._run_async(self.recorder.start())
+        def on_progress(count, next_label):
+            text = f"Captured {count}/5. Next: click the {next_label}." if next_label else "All 5 points captured - saving..."
+            self.after(0, lambda: self.recording_status_label.config(text=text))
+            if next_label is None:
+                self._run_async(self._do_finish_recording())
+
+        self._run_async(self.recorder.start(on_progress=on_progress))
         self.btn_record_start.config(state="disabled")
-        self.btn_record_stop.config(state="normal")
-        self._log("Recording started - perform the full flow yourself on the first creator now.")
+        self.btn_record_cancel.config(state="normal")
+        self.recording_status_label.config(text="Click the New message button now.")
+        self._log("Recording started - click each point as prompted (New message, username input, Chat button, message input, Send button).")
 
-    def _stop_recording(self) -> None:
-        self._run_async(self._do_stop_recording())
+    def _cancel_recording(self) -> None:
+        self._run_async(self.recorder.cancel())
+        self.btn_record_start.config(state="normal")
+        self.btn_record_cancel.config(state="disabled")
+        self.recording_status_label.config(text="Recording cancelled.")
+        self._log("Recording cancelled.")
 
-    async def _do_stop_recording(self) -> None:
-        steps = await self.recorder.stop_and_save()
-        summary = Recorder.describe(steps)
+    async def _do_finish_recording(self) -> None:
+        flow = await self.recorder.finish()
+        if flow is None:
+            self.after(0, lambda: self._log("Recording finished with fewer than 5 points captured - not saved."))
+            return
+        summary = Recorder.describe(flow)
         self.after(0, lambda: (
             self.btn_record_start.config(state="normal"),
-            self.btn_record_stop.config(state="disabled"),
+            self.btn_record_cancel.config(state="disabled"),
+            self.recording_status_label.config(text="Recording saved."),
             self._log("Recording saved:\n" + summary),
         ))
 
     def _preview_recording(self) -> None:
-        steps = Recorder.load()
-        if not steps:
-            messagebox.showerror("No recording", "Record the first creator's flow first.")
+        flow = Recorder.load()
+        if not flow:
+            messagebox.showerror("No recording", "Record the flow first.")
             return
         self._log("Calibrating and rendering preview screenshot...")
-        self._run_async(self._do_preview(steps))
+        self._run_async(self._do_preview(flow))
 
-    async def _do_preview(self, steps) -> None:
+    async def _do_preview(self, flow) -> None:
         if not automation.activate_browser_window(self.browser_hwnd):
             self.after(0, lambda: self._log("Preview failed: could not bring the browser window to the foreground."))
             return
@@ -151,7 +175,7 @@ class App(tk.Tk):
             ))
             return
 
-        await asyncio.to_thread(geometry.render_preview, transform, steps, config.PREVIEW_IMAGE_PATH)
+        await asyncio.to_thread(geometry.render_preview, transform, flow, config.PREVIEW_IMAGE_PATH)
         try:
             os.startfile(config.PREVIEW_IMAGE_PATH)
         except Exception:
@@ -161,9 +185,9 @@ class App(tk.Tk):
     # ---- replay -------------------------------------------------------------
 
     def _start_replay(self) -> None:
-        steps = Recorder.load()
-        if not steps:
-            messagebox.showerror("No recording", "Record the first creator's flow first.")
+        flow = Recorder.load()
+        if not flow:
+            messagebox.showerror("No recording", "Record the flow first.")
             return
         usernames = [u.strip() for u in self.usernames_text.get("1.0", "end").splitlines() if u.strip()]
         message = self.message_text.get("1.0", "end").rstrip("\n")
@@ -172,8 +196,9 @@ class App(tk.Tk):
             messagebox.showerror("Missing input", "Provide at least one username and a message.")
             return
 
-        self.replayer = Replayer(self.bridge, steps, browser_hwnd=self.browser_hwnd, dry_run=dry_run)
-        self._log(f"Starting {'DRY RUN ' if dry_run else ''}replay for {len(usernames)} usernames.")
+        self.replayer = Replayer(self.bridge, flow, browser_hwnd=self.browser_hwnd, dry_run=dry_run)
+        count = 1 if dry_run else len(usernames)
+        self._log(f"Starting {'DRY RUN ' if dry_run else ''}replay for {count} username(s).")
         self._run_async(self._do_replay(usernames, message))
 
     async def _do_replay(self, usernames: list[str], message: str) -> None:
@@ -183,7 +208,7 @@ class App(tk.Tk):
         results = await self.replayer.run(usernames, message, on_progress=on_progress)
         ok_statuses = (config.STATUS_SENT, config.STATUS_DRY_RUN_OK)
         ok = sum(1 for r in results if r.status in ok_statuses)
-        label = "reached message step" if self.replayer.dry_run else "sent"
+        label = "reached Send" if self.replayer.dry_run else "sent"
         self.after(0, lambda: self._log(f"Run finished: {ok}/{len(results)} {label}. See native/logs/ for the full CSV."))
 
     def _stop_replay(self) -> None:

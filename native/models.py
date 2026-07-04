@@ -3,40 +3,54 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Fixed, ordered list of the 5 points a recording captures. Guided recording
+# asks for exactly these, one click each, in this order - no inference from
+# a raw click/focus/paste event stream, no selector matching, nothing to
+# misclassify.
+STEP_LABELS = [
+    "New message button",
+    "Username input",
+    "Chat button (hover point)",
+    "Message input",
+    "Send button",
+]
+
 
 @dataclass
-class ActionStep:
-    """One step of the replayable action script.
+class RecordedFlow:
+    """The 5 fixed viewport rects captured during Record. Each is clicked
+    directly during replay, converted to a real screen coordinate via
+    geometry.PixelTransform - no selector, no DOM matching."""
 
-    Stores the recorded element's viewport-relative rect directly - no
-    selector, no DOM matching. Replay converts this rect to a real screen
-    coordinate using the browser window's *current* geometry (see
-    geometry.py) and clicks there. Positions inside TikTok's messaging
-    dialog are stable once it's open, so this is far more reliable than
-    re-locating elements by CSS selector, which broke repeatedly on
-    TikTok's generated/state-dependent class names.
-    """
+    new_message: dict
+    username_input: dict
+    chat_button: dict
+    message_input: dict
+    send_button: dict
 
-    step_id: int
-    kind: str  # CLICK | HOVER_THEN_CLICK | FOCUS_AND_PASTE | PASTE_USERNAME | PASTE_MULTILINE_THEN_ENTER
-    rect_viewport: dict  # {x, y, w, h} in CSS px, as recorded
-    notes: str = ""
+    def as_list(self) -> list[tuple[str, dict]]:
+        return list(zip(STEP_LABELS, [
+            self.new_message, self.username_input, self.chat_button,
+            self.message_input, self.send_button,
+        ]))
 
     def to_dict(self) -> dict:
         return {
-            "stepId": self.step_id,
-            "kind": self.kind,
-            "rectViewport": self.rect_viewport,
-            "notes": self.notes,
+            "newMessage": self.new_message,
+            "usernameInput": self.username_input,
+            "chatButton": self.chat_button,
+            "messageInput": self.message_input,
+            "sendButton": self.send_button,
         }
 
     @staticmethod
-    def from_dict(d: dict) -> "ActionStep":
-        return ActionStep(
-            step_id=d["stepId"],
-            kind=d["kind"],
-            rect_viewport=d.get("rectViewport") or d.get("rect_viewport"),
-            notes=d.get("notes", ""),
+    def from_dict(d: dict) -> "RecordedFlow":
+        return RecordedFlow(
+            new_message=d["newMessage"],
+            username_input=d["usernameInput"],
+            chat_button=d["chatButton"],
+            message_input=d["messageInput"],
+            send_button=d["sendButton"],
         )
 
 

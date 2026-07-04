@@ -5,7 +5,7 @@ NATIVE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = NATIVE_DIR / "storage"
 LOGS_DIR = NATIVE_DIR / "logs"
 
-ACTION_SCRIPT_PATH = STORAGE_DIR / "action_script.json"
+RECORDED_FLOW_PATH = STORAGE_DIR / "recorded_flow.json"
 PREVIEW_IMAGE_PATH = STORAGE_DIR / "recording_preview.png"
 
 WS_HOST = "127.0.0.1"
@@ -36,7 +36,7 @@ PRE_CLICK_PAUSE_MAX_S = 0.25
 HOVER_SETTLE_MIN_S = 0.15
 HOVER_SETTLE_MAX_S = 0.3
 
-# Wait after pressing Enter before checking whether the message box went
+# Wait after clicking Send before checking whether the message box went
 # empty (the "sent" signal), giving the page a moment to react.
 SEND_VERIFY_WAIT_S = 0.6
 
@@ -50,5 +50,4 @@ STATUS_SKIPPED_NOT_FOUND = "SKIPPED_NOT_FOUND"
 STATUS_FAILED_SEND_UNCONFIRMED = "FAILED_SEND_UNCONFIRMED"
 STATUS_FAILED_UI_STUCK = "FAILED_UI_STUCK"
 STATUS_ABORTED = "ABORTED"
-STATUS_DONE_RECORDED = "DONE (recorded)"
 STATUS_DRY_RUN_OK = "DRY_RUN_OK"

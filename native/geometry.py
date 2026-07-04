@@ -162,20 +162,19 @@ def calibrate_via_screenshot() -> PixelTransform | None:
     return transform
 
 
-def render_preview(transform: PixelTransform, steps, output_path) -> None:
-    """Takes a fresh screenshot and draws a numbered marker at each step's
-    click point *in screenshot pixel space*, so what you see in the saved
-    image is exactly where those pixels are in the screenshot - separate
-    from (and not necessarily equal to) the mouse-space coordinates
+def render_preview(transform: PixelTransform, flow, output_path) -> None:
+    """Takes a fresh screenshot and draws a numbered marker at each of the
+    recorded flow's 5 points, *in screenshot pixel space*, so what you see
+    in the saved image is exactly where those pixels are in the screenshot -
+    separate from (and not necessarily equal to) the mouse-space coordinates
     actually used to click."""
     screenshot = pyautogui.screenshot()
     draw = ImageDraw.Draw(screenshot)
     radius = 14
-    for step in steps:
-        sx, sy = transform.rect_to_screenshot(step.rect_viewport)
+    for i, (label, rect) in enumerate(flow.as_list(), start=1):
+        sx, sy = transform.rect_to_screenshot(rect)
         draw.ellipse([sx - radius, sy - radius, sx + radius, sy + radius], outline=(255, 0, 0), width=3)
         draw.line([sx - radius, sy, sx + radius, sy], fill=(255, 0, 0), width=1)
         draw.line([sx, sy - radius, sx, sy + radius], fill=(255, 0, 0), width=1)
-        label = f"{step.step_id}:{step.kind}"
-        draw.text((sx + radius + 4, sy - radius), label, fill=(255, 0, 0))
+        draw.text((sx + radius + 4, sy - radius), f"{i}: {label}", fill=(255, 0, 0))
     screenshot.save(output_path)

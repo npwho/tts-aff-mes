@@ -13,16 +13,17 @@ TikTok's captcha):
   human), driven by what the extension reports over a local WebSocket
   connection (`ws://127.0.0.1:8765`).
 
-There's no CSS-selector matching anywhere in the replay path. TikTok's
-generated/state-dependent class names made re-locating elements by selector
-unreliable in practice (a class can exist only while a tooltip happens to be
-showing, or only while an input is focused). Instead, the native tool clicks
-*fixed viewport positions* recorded once during the Record step, converted to
-a real screen coordinate via a screenshot-based pixel calibration (see
-below) - not by trusting anything the browser self-reports about its own
-window geometry. The extension's only job during replay is answering "does
-this username exist" and reading back text at a point to verify a
-paste/send — never "where is this element now."
+There's no CSS-selector matching anywhere, and no inferring intent from a
+recorded event stream either — both were tried and both broke in practice.
+Recording is **guided**: the tool asks for exactly 5 clicks, one at a time,
+in a fixed order (New message button, Username input, Chat button hover
+point, Message input, Send button). Whatever you click *is* that point.
+Replay then clicks those 5 fixed positions directly, converted to a real
+screen coordinate via a screenshot-based pixel calibration (see below) - not
+by trusting anything the browser self-reports about its own window geometry.
+The extension's only job during replay is answering "does this username
+exist" and reading back text at a point to verify a paste/send — never
+"where is this element now."
 
 See `docs/protocol.md` for the full message schema between the two, and the
 plan file this was built from for the design rationale.
@@ -58,28 +59,33 @@ when a click or calibration happens.
 
 ## Usage (run in this order every session)
 
-1. **Record** — click "Start Recording", then manually perform the entire
-   flow yourself on the very first creator: click "New message", search the
-   username, hover the result row, click the revealed "Chat" button, click
-   the message box, paste a placeholder message. You do **not** need to
-   press Enter or actually send anything — the recorder only needs to see
-   you click/focus/paste on each element; click "Stop Recording & Save" as
-   soon as you've pasted into the message box. Nothing is sent to that
-   creator unless you choose to press Enter yourself.
+1. **Record** — click "Start Recording". The tool tells you exactly what to
+   click next, one point at a time:
+   1. New message button
+   2. Username input (search box)
+   3. Chat button — you'll need a real username already searched and showing
+      a result row so the (hover-revealed) Chat button is visible to click
+   4. Message input (the chat's text box)
+   5. Send button
+   It saves automatically the moment all 5 are captured
+   (`native/storage/recorded_flow.json`). Nothing is sent to anyone during
+   recording — clicking these 5 points doesn't type or send a message.
    - Click **"Preview Recording (screenshot)"** afterwards — it calibrates,
      takes a real screenshot, and draws a numbered red circle at exactly
-     where each recorded step will click. The image opens automatically
+     where each of the 5 points will click. The image opens automatically
      (`native/storage/recording_preview.png`). Check every circle actually
-     lands on the button/input you clicked before trusting a replay run.
-2. **Replay** — paste the remaining usernames (one per line) and the message
-   into the tool, click Start. Each username is looked up fresh; if no
-   search result exists (username doesn't exist), it's logged
-   `SKIPPED_NOT_FOUND` and the tool moves on automatically. Results are
-   written incrementally to `native/logs/run_<timestamp>.csv`. Check "Dry
-   run" first to click through the whole flow (New message → search → hover
-   + click Chat → focus message box) without ever pasting the message or
-   pressing Enter, to visually confirm it's clicking the right elements
-   before sending anything for real.
+     lands on the right button/input before trusting a replay run.
+2. **Replay** — paste usernames (one per line) and the message into the
+   tool, click Start. Each username is looked up fresh; if no search result
+   exists (username doesn't exist), it's logged `SKIPPED_NOT_FOUND` and the
+   tool moves on automatically. Results are written incrementally to
+   `native/logs/run_<timestamp>.csv`.
+   - Check **"Dry run"** first — it runs the *entire* click sequence
+     (New message → username → hover+click Chat → message input → Send) for
+     only the **first** username in your list, but leaves the message empty
+     and still clicks Send for real. Most chat UIs simply no-op on an empty
+     send, so this safely confirms the whole path works, including the
+     actual Send click, without risking a real message going out.
 
 ## Safety notes
 

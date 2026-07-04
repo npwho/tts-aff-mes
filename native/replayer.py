@@ -1,13 +1,12 @@
-"""Per-username replay loop (docs/protocol.md: replay phase).
+"""Replay against a fixed 5-point RecordedFlow (docs/protocol.md: replay
+phase). No selector matching, no per-step kind inference - just: click New
+message, click username input + paste + check existence, hover+click Chat,
+click message input (+ paste unless dry run), click Send.
 
-Clicks fixed viewport positions recorded during the Record step, converted
-to a real screen coordinate via a screenshot-based pixel calibration (see
-geometry.py) done fresh at the start of every username - no selector
-matching, and no trusting of self-reported browser window geometry, which
-was found to be unreliable on at least one real deployment (Windows Server
-2022 / Remote Desktop). The extension is only asked to answer "does this
-username exist", place/remove calibration markers, and read back text at a
-point for paste/send verification - never to re-locate an element.
+Coordinates come from a screenshot-based pixel calibration (geometry.py)
+done fresh before every username - no trusting of self-reported browser
+window geometry, which was found to be unreliable on at least one real
+deployment (Windows Server 2022 / Remote Desktop).
 """
 from __future__ import annotations
 
@@ -17,7 +16,7 @@ import datetime
 import logging
 
 from . import automation, config, geometry
-from .models import ActionStep, CSV_HEADER, RunResult
+from .models import CSV_HEADER, RecordedFlow, RunResult
 from .ws_server import NativeBridge
 
 log = logging.getLogger("replayer")
@@ -38,12 +37,12 @@ class Replayer:
     def __init__(
         self,
         bridge: NativeBridge,
-        steps: list[ActionStep],
+        flow: RecordedFlow,
         browser_hwnd: int | None = None,
         dry_run: bool = False,
     ) -> None:
         self.bridge = bridge
-        self.steps = steps
+        self.flow = flow
         self.browser_hwnd = browser_hwnd
         self.dry_run = dry_run
         self._abort = False
@@ -77,13 +76,13 @@ class Replayer:
             await self.bridge.send_fire_and_forget("remove_calibration_markers")
         return self._transform is not None
 
-    async def _screen_point(self, rect: dict) -> tuple[float, float]:
+    def _mouse_point(self, rect: dict) -> tuple[float, float]:
         sx, sy = self._transform.rect_to_mouse(rect)
         log.info("rect=%s -> mouse=(%.0f, %.0f)", rect, sx, sy)
         return sx, sy
 
-    async def _click_rect(self, rect: dict, jitter: bool = True) -> None:
-        sx, sy = await self._screen_point(rect)
+    def _click_rect(self, rect: dict, jitter: bool = True) -> None:
+        sx, sy = self._mouse_point(rect)
         automation.click(sx, sy, jitter=jitter)
 
     async def _check_foreground(self) -> bool:
@@ -115,6 +114,7 @@ class Replayer:
 
     async def run_one(self, username: str, message: str) -> RunResult:
         start = datetime.datetime.now().isoformat(timespec="seconds")
+        flow = self.flow
 
         if not await self._check_foreground():
             return RunResult(
@@ -129,75 +129,80 @@ class Replayer:
                 notes="calibration markers not found in screenshot - is the browser window fully visible?",
             )
 
-        for step in self.steps:
-            if self._abort:
-                raise AbortRun()
+        if self._abort:
+            raise AbortRun()
 
-            if step.kind in ("CLICK", "FOCUS_AND_PASTE"):
-                await self._click_rect(step.rect_viewport)
+        # 1. New message
+        self._click_rect(flow.new_message)
 
-            elif step.kind == "PASTE_USERNAME":
-                await self._click_rect(step.rect_viewport)
-                automation.paste_text(username)
-                search = await self.bridge.request(
-                    "check_username_exists", {"username": username},
-                    timeout=config.SEARCH_RESULT_TIMEOUT_S,
-                )
-                status = search.get("status")
-                end = datetime.datetime.now().isoformat(timespec="seconds")
-                if status == "not_found":
-                    await self._reset_state()
-                    return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)
-                if status == "ambiguous":
-                    await self._reset_state()
-                    return RunResult(
-                        username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start,
-                        timestamp_end=end, notes=f"ambiguous match, count={search.get('count')}",
-                    )
+        # 2. Username input: click, paste, check existence
+        self._click_rect(flow.username_input)
+        automation.paste_text(username)
+        search = await self.bridge.request(
+            "check_username_exists", {"username": username}, timeout=config.SEARCH_RESULT_TIMEOUT_S,
+        )
+        status = search.get("status")
+        end = datetime.datetime.now().isoformat(timespec="seconds")
+        if status == "not_found":
+            await self._reset_state()
+            return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)
+        if status == "ambiguous":
+            await self._reset_state()
+            return RunResult(
+                username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start,
+                timestamp_end=end, notes=f"ambiguous match, count={search.get('count')}",
+            )
 
-            elif step.kind == "HOVER_THEN_CLICK":
-                # The recorded rect is the Chat button's own position, which
-                # lies inside the result row - moving the cursor there is
-                # itself what triggers the row's hover reveal, so there's no
-                # need for a separate "row" position at all.
-                sx, sy = await self._screen_point(step.rect_viewport)
-                automation.move_to(sx, sy)
-                automation.hover_settle()
-                automation.click(sx, sy, jitter=True)
+        if self._abort:
+            raise AbortRun()
 
-            elif step.kind == "PASTE_MULTILINE_THEN_ENTER":
-                if self.dry_run:
-                    end = datetime.datetime.now().isoformat(timespec="seconds")
-                    await self._reset_state()
-                    preview = (message.strip()[:60] + "...") if message.strip() else "(no message provided)"
-                    return RunResult(
-                        username, config.STATUS_DRY_RUN_OK, timestamp_start=start,
-                        timestamp_end=end, notes=f"reached message box, would send: {preview}",
-                    )
+        # 3. Chat button: moving the cursor to its own recorded point is
+        # itself what triggers the containing row's hover reveal.
+        sx, sy = self._mouse_point(flow.chat_button)
+        automation.move_to(sx, sy)
+        automation.hover_settle()
+        automation.click(sx, sy, jitter=True)
 
-                await self._click_rect(step.rect_viewport)
-                automation.paste_text(message)
-                pasted_text = await self._text_at_rect(step.rect_viewport)
-                if not pasted_text.strip().startswith(message.strip()[:40]):
-                    end = datetime.datetime.now().isoformat(timespec="seconds")
-                    await self._reset_state()
-                    return RunResult(
-                        username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
-                        timestamp_end=end, notes="paste into message box did not verify",
-                    )
-                automation.press_enter()
-                await asyncio.sleep(config.SEND_VERIFY_WAIT_S)
-                remaining_text = await self._text_at_rect(step.rect_viewport)
+        # 4. Message input: click, and paste the real message unless this is
+        # a dry run (left empty on purpose so Send can be safely clicked for
+        # real without actually sending anything - most chat UIs no-op on
+        # an empty send).
+        self._click_rect(flow.message_input)
+        if not self.dry_run:
+            automation.paste_text(message)
+            pasted_text = await self._text_at_rect(flow.message_input)
+            if not pasted_text.strip().startswith(message.strip()[:40]):
                 end = datetime.datetime.now().isoformat(timespec="seconds")
                 await self._reset_state()
-                if remaining_text.strip() == "":
-                    return RunResult(username, config.STATUS_SENT, timestamp_start=start, timestamp_end=end)
-                return RunResult(username, config.STATUS_FAILED_SEND_UNCONFIRMED, timestamp_start=start, timestamp_end=end)
+                return RunResult(
+                    username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
+                    timestamp_end=end, notes="paste into message box did not verify",
+                )
 
+        # 5. Send button - clicked for real even in a dry run, per the
+        # empty-input safety net above.
+        self._click_rect(flow.send_button)
+        await asyncio.sleep(config.SEND_VERIFY_WAIT_S)
         end = datetime.datetime.now().isoformat(timespec="seconds")
-        return RunResult(username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start, timestamp_end=end, notes="script ended without sending")
+        await self._reset_state()
+
+        if self.dry_run:
+            return RunResult(
+                username, config.STATUS_DRY_RUN_OK, timestamp_start=start, timestamp_end=end,
+                notes="clicked Send with an empty message (intentional no-op)",
+            )
+
+        remaining_text = await self._text_at_rect(flow.message_input)
+        if remaining_text.strip() == "":
+            return RunResult(username, config.STATUS_SENT, timestamp_start=start, timestamp_end=end)
+        return RunResult(username, config.STATUS_FAILED_SEND_UNCONFIRMED, timestamp_start=start, timestamp_end=end)
 
     async def run(self, usernames: list[str], message: str, on_progress=None) -> list[RunResult]:
+        # A dry run only ever exercises the first username - it's a
+        # click-path sanity check, not a batch operation.
+        if self.dry_run:
+            usernames = usernames[:1]
+
         config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
         log_path = config.LOGS_DIR / f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         results: list[RunResult] = []

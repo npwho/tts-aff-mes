@@ -12,14 +12,19 @@ The extension NEVER dispatches synthetic input events into the page. It only rea
 and reports what it observes. All real mouse/keyboard action happens on the native side via OS-level
 input (pyautogui/pynput).
 
-**No selector matching at all.** Earlier versions of this tool re-located each element by CSS
-selector on every replay. That broke repeatedly against TikTok's generated/state-dependent class
-names (e.g. a class that only exists while a tooltip happens to be showing). Positions inside
-TikTok's messaging dialog are stable once it's open, so replay instead clicks fixed viewport
-positions recorded once during the Record step, converted to a real screen coordinate via a
-screenshot-based pixel calibration (see below). The extension's only remaining jobs during replay
-are: place/remove calibration marker elements, report whether a searched username exists, read
-back text at a point, and watch for captchas/open dialogs.
+**No selector matching, and no inferring what a click "means" from a raw event stream.** Earlier
+versions re-located each element by CSS selector on every replay (broke against TikTok's
+generated/state-dependent class names) and then, after that was dropped, tried to infer intent
+from a passively-recorded stream of click/focus/paste events (still ambiguous - hover-vs-click,
+which paste was the username vs. the message, dedup logic, etc.). Recording is now **guided**:
+native tells the user (via its own GUI) exactly one of 5 fixed points to click at a time, in this
+fixed order: New message button, Username input, Chat button (hover point), Message input, Send
+button. Whatever they click *is* that step - no inference. Positions inside TikTok's messaging
+dialog are stable once it's open, so replay clicks those 5 fixed viewport positions directly,
+converted to a real screen coordinate via a screenshot-based pixel calibration (see below). The
+extension's only remaining jobs during replay are: place/remove calibration marker elements,
+report whether a searched username exists, read back text at a point, and watch for captchas/open
+dialogs.
 
 ## Handshake
 
@@ -108,33 +113,26 @@ recording can be visually confirmed before ever running a real OS click against 
 if clicks still land wrong despite a correct-looking preview, the screenshot/mouse-space
 correction is where to look next.
 
-## Recording phase
+## Recording phase (guided, 5 fixed points)
 
 **`start_recording`** (native -> ext)
 ```json
 {"type": "start_recording"}
 ```
 
-**`record_event`** (ext -> native) — emitted for each real, user-driven `click`/`focus`/`paste`
-event captured passively. Never synthesized. Carries only a rect and a short text snapshot - no
-selector.
+**`record_event`** (ext -> native) — emitted for every real, user-driven click while recording is
+active. Never synthesized. Carries only a rect - no selector, no text, no focus/paste tracking.
 ```json
-{
-  "type": "record_event",
-  "eventType": "click",
-  "rectViewport": {"x": 1200, "y": 40, "w": 120, "h": 32},
-  "text": "New message",
-  "timestamp": 1730000000000
-}
+{"type": "record_event", "eventType": "click", "rectViewport": {"x": 1200, "y": 40, "w": 120, "h": 32}, "timestamp": 1730000000000}
 ```
-Native's recorder tags certain observed events specially when serializing to
-`action_script.json`:
-- `HOVER_THEN_CLICK` — a click on an element whose text is "Chat"/"Message" (the button that only
-  becomes visible/interactable after a genuine hover on the search result row).
-- `PASTE_USERNAME` / `PASTE_MULTILINE_THEN_ENTER` — the first vs. second paste event in the
-  recording (username into search, then message into the chat box).
+`native/recorder.py` assigns each incoming click to the current step in this fixed order - New
+message button, Username input, Chat button (hover point), Message input, Send button - and
+advances; it does not try to classify or interpret the click in any other way. Once all 5 are
+captured, the GUI automatically finishes and saves `native/storage/recorded_flow.json`
+(`models.RecordedFlow`).
 
-**`stop_recording`** (native -> ext) — user clicked "Stop Recording & Save" in the GUI.
+**`stop_recording`** (native -> ext) — sent once recording finishes (all 5 captured) or is
+cancelled from the GUI.
 ```json
 {"type": "stop_recording"}
 ```
@@ -142,7 +140,10 @@ Native's recorder tags certain observed events specially when serializing to
 ## Replay phase (per username)
 
 Calibration (`place_calibration_markers` / `markers_placed` / `remove_calibration_markers`, see
-above) runs once at the start of every username, before any clicks for that username.
+above) runs once at the start of every username, before any clicks for that username. Replay then
+runs a fixed sequence against the `RecordedFlow`'s 5 points - click New message, click username
+input + paste + check existence, hover+click Chat, click message input (+ paste unless dry run),
+click Send - not a generic loop over arbitrary steps.
 
 **`check_username_exists`** (native -> ext) — called after pasting a username into the search box.
 ```json
@@ -163,9 +164,10 @@ On `not_found` or `ambiguous`: native logs `SKIPPED_NOT_FOUND`, runs `reset_stat
 next username — no pause, per the chosen failure-handling behavior.
 
 **`get_text_at_point`** (native -> ext) — read-only readback via `document.elementFromPoint`, used
-both to verify a paste landed before pressing Enter, and to verify a message was sent (checked by
+both to verify a paste landed before clicking Send, and to verify a message was sent (checked by
 the message box going empty afterwards). No selector involved - it just reads whatever element is
-currently at that recorded viewport point.
+currently at that recorded viewport point. Skipped entirely in a dry run, which leaves the message
+box empty on purpose.
 ```json
 {"type": "get_text_at_point", "corrId": "r-44", "viewportX": 640, "viewportY": 500}
 ```
