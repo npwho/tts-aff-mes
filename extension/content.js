@@ -93,9 +93,23 @@ function recordingClickHandler(event) {
   });
 }
 
+function isFormLikeElement(el) {
+  const tag = el.tagName.toLowerCase();
+  if (tag === "input" || tag === "textarea") return true;
+  if (el.isContentEditable) return true;
+  const role = el.getAttribute("role");
+  return role === "textbox" || role === "searchbox";
+}
+
 function recordingFocusHandler(event) {
   const el = event.target;
   if (!(el instanceof Element)) return;
+  // Clicking anywhere inside a scrollable/tabindex-able container (e.g. a
+  // chat list panel) moves DOM focus to that container, not to the thing
+  // you actually clicked. Only real form controls are meaningful "focus"
+  // steps for replay - anything else is noise with unstable, dynamic text
+  // content that will never match again.
+  if (!isFormLikeElement(el)) return;
   send({
     type: "record_event",
     eventType: "focus",
