@@ -21,7 +21,7 @@ input (pyautogui/pynput).
 
 **`hello_ack`** (native -> ext)
 ```json
-{"type": "hello_ack", "mode": "idle|calibrating|recording|replaying", "serverVersion": "0.1.0"}
+{"type": "hello_ack", "mode": "idle|recording|replaying", "serverVersion": "0.1.0"}
 ```
 
 ## Health
@@ -42,41 +42,33 @@ Native response: immediately pause the whole run (not just skip one username) an
 {"type": "error", "context": "replay_locate", "message": "selector threw"}
 ```
 
-## Calibration phase
+## Coordinate conversion (no calibration step)
 
-**`calibration_request_point`** (native -> ext)
-```json
-{"type": "calibration_request_point", "corrId": "cal-1", "pointId": 1, "viewportX": 50, "viewportY": 50}
-```
-Extension inserts a small fixed-position marker DOM element at that viewport coordinate
-(pure rendering — not a synthetic input event) and replies:
-
-**`calibration_marker_ready`** (ext -> native)
+There is no separate calibration phase. Every extension response that carries a `rectViewport`
+(viewport-relative CSS pixels) also carries a `windowGeometry` snapshot:
 ```json
 {
-  "type": "calibration_marker_ready",
-  "corrId": "cal-1",
-  "pointId": 1,
-  "viewportX": 50,
-  "viewportY": 50,
-  "windowInnerWidth": 1512,
-  "windowInnerHeight": 864,
-  "devicePixelRatio": 1.5,
   "screenX": 40,
-  "screenY": 30
+  "screenY": 30,
+  "outerWidth": 1536,
+  "outerHeight": 864,
+  "innerWidth": 1520,
+  "innerHeight": 780,
+  "devicePixelRatio": 1.5
 }
 ```
-The user then hovers their real mouse over the marker and presses F8 (or clicks "Capture" in the
-Tk GUI); native reads the real cursor position via `pyautogui.position()`. Repeated for a second,
-far-apart point to solve the 2-point affine transform (handles zoom + DPI scaling together).
-
-**`calibration_complete`** (native -> ext) — informational, extension removes markers.
-```json
-{"type": "calibration_complete", "transform": {"scaleX": 1.5, "scaleY": 1.5, "offsetX": 40, "offsetY": 30}}
+`native/geometry.py`'s `viewport_rect_to_screen(rect, geometry)` converts a rect's center to a real
+screen coordinate:
 ```
-
-Native persists the transform to `native/storage/calibration.json` together with the
-`screenX`/`screenY` observed at calibration time, used later for drift detection.
+chrome_top = outerHeight - innerHeight   # height of tabs/address bar above the page viewport
+screen_x   = (screenX + rect.center_x) * devicePixelRatio
+screen_y   = (screenY + chrome_top + rect.center_y) * devicePixelRatio
+```
+This is recomputed fresh on every single click, so a window that moves or resizes mid-run is
+handled automatically — no drift detection or re-calibration step needed. An earlier version of
+this tool used a one-time, hand-calibrated 2-point transform; it was replaced because it depended
+on a human precisely hovering a small on-page marker, which turned out to be an unreliable source
+of systematic offset in practice.
 
 ## Recording phase
 
@@ -131,6 +123,7 @@ first creator's message was sent.
   "stepId": 3,
   "found": true,
   "rectViewport": {"x": 300, "y": 220, "w": 260, "h": 40},
+  "windowGeometry": {"screenX": 40, "screenY": 30, "outerWidth": 1536, "outerHeight": 864, "innerWidth": 1520, "innerHeight": 780, "devicePixelRatio": 1.5},
   "confidence": "exact|fallback",
   "matchedBy": "data-testid|id|text|structural"
 }
@@ -148,13 +141,13 @@ into the search box.
 
 **`search_result_status`** (ext -> native)
 ```json
-{"type": "search_result_status", "corrId": "r-43", "status": "found", "rectViewport": {...}}
+{"type": "search_result_status", "corrId": "r-43", "status": "found", "rectViewport": {...}, "windowGeometry": {...}}
 ```
 ```json
 {"type": "search_result_status", "corrId": "r-43", "status": "not_found"}
 ```
 ```json
-{"type": "search_result_status", "corrId": "r-43", "status": "ambiguous", "count": 2, "exactMatchRect": null}
+{"type": "search_result_status", "corrId": "r-43", "status": "ambiguous", "count": 2, "exactMatchRect": null, "windowGeometry": {...}}
 ```
 On `not_found`: native logs `SKIPPED_NOT_FOUND`, runs `reset_state`, moves to the next username —
 no pause, per the chosen failure-handling behavior.

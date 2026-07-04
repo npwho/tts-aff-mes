@@ -7,8 +7,7 @@
 // tool; this script only reports what it observes (element existence,
 // position, text) and passively listens to real, user-driven events.
 
-let mode = "idle"; // idle | calibrating | recording | replaying
-let calibrationMarkers = [];
+let mode = "idle"; // idle | recording | replaying
 let captchaObserver = null;
 
 function send(msg) {
@@ -38,45 +37,6 @@ function startCaptchaWatch() {
 
 function describeElement(el) {
   return `${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}${el.className ? "." + String(el.className).split(/\s+/).join(".") : ""}`;
-}
-
-// ---- Calibration ------------------------------------------------------------
-
-function handleCalibrationRequestPoint(msg) {
-  const marker = document.createElement("div");
-  marker.setAttribute("data-tts-aff-mes-calibration-marker", "true");
-  marker.style.cssText = [
-    "position:fixed",
-    `left:${msg.viewportX}px`,
-    `top:${msg.viewportY}px`,
-    "width:16px",
-    "height:16px",
-    "border-radius:50%",
-    "background:red",
-    "border:2px solid white",
-    "z-index:2147483647",
-    "pointer-events:none",
-  ].join(";");
-  document.documentElement.appendChild(marker);
-  calibrationMarkers.push(marker);
-
-  send({
-    type: "calibration_marker_ready",
-    corrId: msg.corrId,
-    pointId: msg.pointId,
-    viewportX: msg.viewportX,
-    viewportY: msg.viewportY,
-    windowInnerWidth: window.innerWidth,
-    windowInnerHeight: window.innerHeight,
-    devicePixelRatio: window.devicePixelRatio,
-    screenX: window.screenX,
-    screenY: window.screenY,
-  });
-}
-
-function handleCalibrationComplete() {
-  calibrationMarkers.forEach((m) => m.remove());
-  calibrationMarkers = [];
 }
 
 // ---- Recording ---------------------------------------------------------------
@@ -159,6 +119,7 @@ function handleReplayLocate(msg) {
     stepId: msg.stepId,
     found: true,
     rectViewport: rectOf(el),
+    windowGeometry: windowGeometry(),
     confidence: matchedBy === msg.selectorDescriptor.strategy ? "exact" : "fallback",
     matchedBy,
   });
@@ -184,7 +145,13 @@ function handleReplayLocateSearchResult(msg) {
     return;
   }
   if (rows.length === 1) {
-    send({ type: "search_result_status", corrId: msg.corrId, status: "found", rectViewport: rectOf(rows[0]) });
+    send({
+      type: "search_result_status",
+      corrId: msg.corrId,
+      status: "found",
+      rectViewport: rectOf(rows[0]),
+      windowGeometry: windowGeometry(),
+    });
     return;
   }
   const exactRow = exact ? rows[0] : null;
@@ -194,6 +161,7 @@ function handleReplayLocateSearchResult(msg) {
     status: "ambiguous",
     count: rows.length,
     exactMatchRect: exactRow ? rectOf(exactRow) : null,
+    windowGeometry: windowGeometry(),
   });
 }
 
@@ -225,12 +193,6 @@ chrome.runtime.onMessage.addListener((msg) => {
   switch (msg.type) {
     case "hello_ack":
       mode = msg.mode || mode;
-      break;
-    case "calibration_request_point":
-      handleCalibrationRequestPoint(msg);
-      break;
-    case "calibration_complete":
-      handleCalibrationComplete();
       break;
     case "start_recording":
       startRecording();

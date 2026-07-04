@@ -2,8 +2,8 @@
 
 Owns the single connection to the extension's background service worker and
 provides a small async request/response + pub/sub API on top of the raw
-JSON protocol described in docs/protocol.md, so calibration.py/recorder.py/
-replayer.py don't need to touch websockets directly.
+JSON protocol described in docs/protocol.md, so recorder.py/replayer.py
+don't need to touch websockets directly.
 """
 from __future__ import annotations
 

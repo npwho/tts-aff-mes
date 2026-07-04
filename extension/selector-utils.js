@@ -56,6 +56,22 @@ function structuralSelector(el, maxDepth = 4) {
   return parts.join(" ");
 }
 
+// Snapshot of the current browser window's OS-level geometry, used by the
+// native tool to convert a viewport-relative rect into a real screen
+// coordinate fresh on every single locate response - no separate
+// calibration step, and no staleness if the window moves/resizes mid-run.
+function windowGeometry() {
+  return {
+    screenX: window.screenX,
+    screenY: window.screenY,
+    outerWidth: window.outerWidth,
+    outerHeight: window.outerHeight,
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+  };
+}
+
 function rectOf(el) {
   const r = el.getBoundingClientRect();
   return { x: r.x, y: r.y, w: r.width, h: r.height };

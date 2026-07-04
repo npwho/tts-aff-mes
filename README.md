@@ -31,26 +31,34 @@ plan file this was built from for the design rationale.
    python -m native.main
    ```
 
+There's no manual calibration step: the extension reports the browser
+window's actual on-screen geometry (position, size, zoom) alongside every
+element it locates, so the native tool converts a page coordinate into a
+real screen coordinate fresh on every single click. Moving or resizing the
+browser window mid-run is handled automatically. (An earlier version used a
+one-time, hand-calibrated 2-point transform — it was dropped because it
+depended on a human precisely hovering a small on-page marker, which was an
+unreliable source of offset in practice.)
+
 ## Usage (run in this order every session)
 
-1. **Calibrate** — open the TikTok Shop messaging page, click "Start
-   Calibration" in the tool. Two red markers appear on the page one at a
-   time; for each, hover your *real* mouse over the marker (don't click
-   anything) and press **F8** on the keyboard to capture that point without
-   moving the cursor off the marker. This solves for the viewport-to-screen
-   coordinate transform (handles zoom/DPI automatically). Re-run this if you
-   move/resize the browser window or change zoom.
-2. **Record** — click "Start Recording", then manually perform the entire
+1. **Record** — click "Start Recording", then manually perform the entire
    flow yourself on the very first creator: click "New message", search the
    username, hover the result row, click the revealed "Chat" button, click
-   the message box, paste the message, press Enter. Click "Stop Recording &
-   Save" once you see it sent. This creator is already messaged — don't
-   include them in the replay list.
-3. **Replay** — paste the remaining usernames (one per line) and the message
+   the message box, paste a placeholder message. You do **not** need to
+   press Enter or actually send anything — the recorder only needs to see
+   you click/focus/paste on each element; click "Stop Recording & Save" as
+   soon as you've pasted into the message box. Nothing is sent to that
+   creator unless you choose to press Enter yourself.
+2. **Replay** — paste the remaining usernames (one per line) and the message
    into the tool, click Start. Each username is looked up fresh; if no
    search result exists (username doesn't exist), it's logged
    `SKIPPED_NOT_FOUND` and the tool moves on automatically. Results are
-   written incrementally to `native/logs/run_<timestamp>.csv`.
+   written incrementally to `native/logs/run_<timestamp>.csv`. Check "Dry
+   run" first to click through the whole flow (New message → search → hover
+   + click Chat → focus message box) without ever pasting the message or
+   pressing Enter, to visually confirm it's clicking the right elements
+   before sending anything for real.
 
 ## Safety notes
 
@@ -59,6 +67,8 @@ plan file this was built from for the design rationale.
 - Default pacing is conservative (randomized 8-20s between usernames, plus
   occasional longer breaks) — tune `native/config.py` if you want to go
   faster, at your own risk of platform rate-limiting.
-- Keep the browser window focused and don't move/resize it mid-run; the tool
-  checks foreground state per username but a moved window invalidates
-  calibration silently otherwise.
+- The coordinate math assumes the browser window has no left/right chrome
+  (true for virtually all normal browser windows) and that
+  `devicePixelRatio` correctly reflects the monitor the window is on. If
+  clicks still land off-target, check Windows display scaling and try
+  moving the browser window to your primary monitor.

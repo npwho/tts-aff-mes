@@ -5,7 +5,6 @@ NATIVE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = NATIVE_DIR / "storage"
 LOGS_DIR = NATIVE_DIR / "logs"
 
-CALIBRATION_PATH = STORAGE_DIR / "calibration.json"
 ACTION_SCRIPT_PATH = STORAGE_DIR / "action_script.json"
 
 WS_HOST = "127.0.0.1"

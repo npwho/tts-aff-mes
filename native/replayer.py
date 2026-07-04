@@ -10,8 +10,8 @@ import csv
 import datetime
 import logging
 
-from . import automation, config
-from .models import ActionStep, CalibrationTransform, CSV_HEADER, RunResult
+from . import automation, config, geometry
+from .models import ActionStep, CSV_HEADER, RunResult
 from .ws_server import NativeBridge
 
 log = logging.getLogger("replayer")
@@ -25,13 +25,11 @@ class Replayer:
     def __init__(
         self,
         bridge: NativeBridge,
-        transform: CalibrationTransform,
         steps: list[ActionStep],
         browser_hwnd: int | None = None,
         dry_run: bool = False,
     ) -> None:
         self.bridge = bridge
-        self.transform = transform
         self.steps = steps
         self.browser_hwnd = browser_hwnd
         self.dry_run = dry_run
@@ -53,11 +51,6 @@ class Replayer:
         log.warning("Extension connection lost - pausing run")
         self._abort = True
 
-    def _to_screen(self, rect: dict) -> tuple[float, float]:
-        cx = rect["x"] + rect["w"] / 2
-        cy = rect["y"] + rect["h"] / 2
-        return self.transform.viewport_to_screen(cx, cy)
-
     async def _locate(self, step: ActionStep) -> dict:
         return await self.bridge.request(
             "replay_locate",
@@ -69,7 +62,7 @@ class Replayer:
         result = await self._locate(step)
         if not result.get("found"):
             return False
-        sx, sy = self._to_screen(result["rectViewport"])
+        sx, sy = geometry.viewport_rect_to_screen(result["rectViewport"], result["windowGeometry"])
         automation.click(sx, sy)
         return True
 
@@ -132,7 +125,7 @@ class Replayer:
                         timestamp_end=end, notes=f"ambiguous match, count={search.get('count')}",
                     )
                 rect = search.get("exactMatchRect") or search.get("rectViewport")
-                self._last_row_rect_screen = self._to_screen(rect)
+                self._last_row_rect_screen = geometry.viewport_rect_to_screen(rect, search["windowGeometry"])
 
             elif step.kind == "HOVER_THEN_CLICK":
                 if self._last_row_rect_screen is None:
@@ -152,7 +145,7 @@ class Replayer:
                         username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
                         timestamp_end=end, notes="Chat button not revealed after hover",
                     )
-                sx, sy = self._to_screen(result["rectViewport"])
+                sx, sy = geometry.viewport_rect_to_screen(result["rectViewport"], result["windowGeometry"])
                 automation.click(sx, sy, jitter=True)
 
             elif step.kind == "PASTE_MULTILINE_THEN_ENTER":

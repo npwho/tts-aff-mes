@@ -163,11 +163,6 @@ def press_escape() -> None:
     _keyboard.release(Key.esc)
 
 
-def current_screen_position() -> tuple[int, int]:
-    pos = pyautogui.position()
-    return (pos.x, pos.y)
-
-
 def maybe_human_break(username_index: int) -> None:
     if username_index > 0 and username_index % config.HUMAN_BREAK_EVERY_N == 0:
         time.sleep(random.uniform(config.HUMAN_BREAK_MIN_S, config.HUMAN_BREAK_MAX_S))

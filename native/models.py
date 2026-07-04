@@ -77,26 +77,6 @@ class ActionStep:
 
 
 @dataclass
-class CalibrationTransform:
-    scale_x: float
-    scale_y: float
-    offset_x: float
-    offset_y: float
-    calibrated_screen_x: int
-    calibrated_screen_y: int
-
-    def viewport_to_screen(self, vx: float, vy: float) -> tuple[float, float]:
-        return (vx * self.scale_x + self.offset_x, vy * self.scale_y + self.offset_y)
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @staticmethod
-    def from_dict(d: dict) -> "CalibrationTransform":
-        return CalibrationTransform(**d)
-
-
-@dataclass
 class RunResult:
     username: str
     status: str
