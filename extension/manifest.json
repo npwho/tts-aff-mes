@@ -6,7 +6,7 @@
   "permissions": ["activeTab", "tabs"],
   "host_permissions": [
     "https://affiliate.tiktok.com/*",
-    "https://seller-*.tiktok.com/*"
+    "https://*.tiktok.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -15,7 +15,7 @@
     {
       "matches": [
         "https://affiliate.tiktok.com/*",
-        "https://seller-*.tiktok.com/*"
+        "https://*.tiktok.com/*"
       ],
       "js": ["selector-utils.js", "content.js"],
       "run_at": "document_idle"
