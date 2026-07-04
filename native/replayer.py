@@ -74,7 +74,13 @@ class Replayer:
         return True
 
     async def _check_foreground(self) -> bool:
-        return automation.is_browser_foreground(self.browser_hwnd)
+        if automation.is_browser_foreground(self.browser_hwnd):
+            return True
+        # Not foreground yet - most commonly because the user just clicked
+        # Start in this tool's own window. Bring the browser forward with a
+        # real click on its title bar (same as a human alt-tabbing back)
+        # rather than failing immediately.
+        return automation.activate_browser_window(self.browser_hwnd)
 
     async def _reset_state(self) -> bool:
         automation.press_escape()

@@ -56,6 +56,35 @@ def is_browser_foreground(expected_hwnd: int | None) -> bool:
         return True
 
 
+def activate_browser_window(hwnd: int | None) -> bool:
+    """Best-effort: bring the target browser window to the foreground with a
+    genuine OS click on its title bar - the same thing a human alt-tabbing
+    back to the browser would do. A blind SetForegroundWindow call is
+    unreliable from a background process (Windows restricts programmatic
+    foreground-stealing), but a real click is not restricted, since it's
+    indistinguishable from actual user input.
+
+    Returns True if the window is (now) foreground, best-effort.
+    """
+    if sys.platform != "win32" or hwnd is None:
+        return True
+    try:
+        import win32gui
+
+        if win32gui.GetForegroundWindow() == hwnd:
+            return True
+        left, top, right, _bottom = win32gui.GetWindowRect(hwnd)
+        # A point near the top of the window, inside its title bar, so the
+        # click activates the window without landing on page content.
+        x = left + max(100, (right - left) // 4)
+        y = top + 10
+        click(x, y, jitter=False)
+        time.sleep(0.2)
+        return win32gui.GetForegroundWindow() == hwnd
+    except Exception:
+        return True
+
+
 def find_browser_hwnd(title_substring: str) -> int | None:
     if sys.platform != "win32":
         return None
