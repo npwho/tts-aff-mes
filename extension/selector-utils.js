@@ -5,6 +5,18 @@
 const HASH_LIKE_ID = /^[a-z0-9_-]{8,}$/i;
 const PREFERRED_ATTRS = ["data-testid", "data-e2e", "aria-label", "data-qa", "title"];
 
+// Component libraries commonly append a state modifier to a class name
+// (e.g. "core-input-inner-wrapper-focus", "core-tooltip-open"). These only
+// apply while that interaction state happens to be active - a button
+// recorded mid-hover can pick up a "-tooltip-open" class that will never be
+// present again on a normal click. Matching on these makes a selector
+// strictly less reliable, never more, so they're excluded entirely.
+const STATE_CLASS_PATTERN = /-(focus(?:ed)?|active|hover(?:ed)?|open|close[ds]?|selected|checked|disabled|pressed|loading|current|expanded|collapsed|visible|hidden)(?:-|$)/i;
+
+function isStateClass(cls) {
+  return STATE_CLASS_PATTERN.test(cls);
+}
+
 function isHashLikeId(id) {
   if (!id) return true;
   // Reject ids that look auto-generated (long hex/alnum blobs) rather than
@@ -20,7 +32,7 @@ function shortAncestorPath(el, maxDepth = 4) {
   for (let i = 0; i < maxDepth && node && node.nodeType === 1; i++) {
     let part = node.tagName.toLowerCase();
     if (node.className && typeof node.className === "string") {
-      const cls = node.className.trim().split(/\s+/).slice(0, 2).join(".");
+      const cls = node.className.trim().split(/\s+/).filter((c) => c && !isStateClass(c)).slice(0, 2).join(".");
       if (cls) part += `.${cls}`;
     }
     parts.unshift(part);
@@ -29,19 +41,21 @@ function shortAncestorPath(el, maxDepth = 4) {
   return parts.join(" > ");
 }
 
-// A real, queryable compound CSS descendant selector using the FULL class
-// list at each ancestor level (e.g. "div.flex.items-center button.core-btn
-// button.core-btn-text svg path"). Far more specific than matching one
-// generic tag name at a time, which is what made the earlier structural
-// fallback match essentially the first <div>/<button>/<svg> on the whole
-// page instead of the recorded one.
+// A real, queryable compound CSS descendant selector using the class list
+// at each ancestor level (e.g. "div.flex.items-center button.core-btn
+// button.core-btn-text svg path"), excluding transient state-modifier
+// classes (see isStateClass). Far more specific than matching one generic
+// tag name at a time, which is what made the earlier structural fallback
+// match essentially the first <div>/<button>/<svg> on the whole page
+// instead of the recorded one - but specific enough only on classes that
+// will actually still be there on a later, non-hovered/non-focused visit.
 function structuralSelector(el, maxDepth = 4) {
   const parts = [];
   let node = el;
   for (let i = 0; i < maxDepth && node && node.nodeType === 1; i++) {
     let part = node.tagName.toLowerCase();
     if (node.className && typeof node.className === "string") {
-      const classes = node.className.trim().split(/\s+/).filter(Boolean);
+      const classes = node.className.trim().split(/\s+/).filter((c) => c && !isStateClass(c));
       for (const c of classes) {
         try {
           part += `.${CSS.escape(c)}`;

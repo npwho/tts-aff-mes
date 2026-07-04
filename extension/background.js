@@ -29,6 +29,15 @@ function connect() {
     } catch (e) {
       return;
     }
+    // The heartbeat only tests whether this background worker's socket is
+    // alive, not whether any particular tab's content script is - answer it
+    // directly instead of forwarding to a tab (which may not exist, may be
+    // the wrong tab, or may just never reply, silently breaking every
+    // heartbeat and making native think the connection died constantly).
+    if (msg.type === "ping") {
+      sendToNative({ type: "pong" });
+      return;
+    }
     routeToContentScript(msg);
   });
 
