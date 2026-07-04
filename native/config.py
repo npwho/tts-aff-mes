@@ -29,15 +29,19 @@ CLICK_JITTER_PX = 3
 PRE_CLICK_PAUSE_MIN_S = 0.05
 PRE_CLICK_PAUSE_MAX_S = 0.25
 
-# Wait after moving the mouse onto a search-result row before asking for the
-# now-hover-revealed "Chat" button's rect.
+# Wait after moving the mouse onto the recorded "Chat" button position
+# (which lies inside the search result row, so this also triggers the row's
+# hover reveal) before clicking it.
 HOVER_SETTLE_MIN_S = 0.15
 HOVER_SETTLE_MAX_S = 0.3
 
+# Wait after pressing Enter before checking whether the message box went
+# empty (the "sent" signal), giving the page a moment to react.
+SEND_VERIFY_WAIT_S = 0.6
+
 # Timeouts for waiting on extension responses over the WebSocket.
-LOCATE_TIMEOUT_S = 5
+REQUEST_TIMEOUT_S = 5
 SEARCH_RESULT_TIMEOUT_S = 6
-SEND_VERIFY_TIMEOUT_S = 4
 RESET_VERIFY_RETRIES = 3
 
 STATUS_SENT = "SENT"

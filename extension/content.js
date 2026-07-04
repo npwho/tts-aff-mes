@@ -6,6 +6,15 @@
 // with the page happens via genuine OS-level input performed by the native
 // tool; this script only reports what it observes (element existence,
 // position, text) and passively listens to real, user-driven events.
+//
+// There is no selector matching here at all: the native tool clicks fixed
+// viewport positions recorded during the Record step (re-anchored live
+// against the browser window's current on-screen geometry - see
+// geometry.py). This script's only remaining jobs are: report that
+// geometry, report whether a searched username actually exists, read back
+// text at a point for paste/send verification, and watch for captchas/open
+// dialogs. TikTok's generated/state-dependent class names made selector-based
+// re-location unreliable in practice, so replay doesn't depend on it at all.
 
 let mode = "idle"; // idle | recording | replaying
 let captchaObserver = null;
@@ -16,6 +25,29 @@ function send(msg) {
 
 function sendHello() {
   send({ type: "hello", extVersion: "content", tabId: null, url: location.href });
+}
+
+function rectOf(el) {
+  const r = el.getBoundingClientRect();
+  return { x: r.x, y: r.y, w: r.width, h: r.height };
+}
+
+// Snapshot of the current browser window's OS-level geometry, used by the
+// native tool to convert a recorded viewport-relative rect into a real
+// screen coordinate fresh on every single click. That also means a window
+// that gets moved mid-run is handled automatically.
+function windowGeometry() {
+  return {
+    screenX: window.screenX,
+    screenY: window.screenY,
+    outerWidth: window.outerWidth,
+    outerHeight: window.outerHeight,
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    screenWidth: window.screen.width,
+    screenHeight: window.screen.height,
+  };
 }
 
 // ---- Captcha watch (unsolicited, always on) --------------------------------
@@ -40,17 +72,26 @@ function describeElement(el) {
 }
 
 // ---- Recording ---------------------------------------------------------------
+//
+// Only the rect (position/size) and a short text snapshot are recorded -
+// never a CSS selector. Replay reuses the rect directly as a fixed click
+// target; the text snapshot is only used to flag the "Chat" button, which
+// only becomes visible/interactable after a genuine hover.
+
+function recordEvent(eventType, el) {
+  send({
+    type: "record_event",
+    eventType,
+    rectViewport: rectOf(el),
+    text: (el.textContent || "").trim().slice(0, 60),
+    timestamp: Date.now(),
+  });
+}
 
 function recordingClickHandler(event) {
   const el = event.target;
   if (!(el instanceof Element)) return;
-  send({
-    type: "record_event",
-    eventType: "click",
-    selector: buildSelectorDescriptor(el),
-    rectViewport: rectOf(el),
-    timestamp: Date.now(),
-  });
+  recordEvent("click", el);
 }
 
 function isFormLikeElement(el) {
@@ -67,28 +108,15 @@ function recordingFocusHandler(event) {
   // Clicking anywhere inside a scrollable/tabindex-able container (e.g. a
   // chat list panel) moves DOM focus to that container, not to the thing
   // you actually clicked. Only real form controls are meaningful "focus"
-  // steps for replay - anything else is noise with unstable, dynamic text
-  // content that will never match again.
+  // steps for replay.
   if (!isFormLikeElement(el)) return;
-  send({
-    type: "record_event",
-    eventType: "focus",
-    selector: buildSelectorDescriptor(el),
-    rectViewport: rectOf(el),
-    timestamp: Date.now(),
-  });
+  recordEvent("focus", el);
 }
 
 function recordingPasteHandler(event) {
   const el = event.target;
   if (!(el instanceof Element)) return;
-  send({
-    type: "record_event",
-    eventType: "paste",
-    selector: buildSelectorDescriptor(el),
-    rectViewport: rectOf(el),
-    timestamp: Date.now(),
-  });
+  recordEvent("paste", el);
 }
 
 function startRecording() {
@@ -105,24 +133,10 @@ function stopRecording() {
   document.removeEventListener("paste", recordingPasteHandler, { capture: true });
 }
 
-// ---- Replay: locate / search-result / text readback / send verify / reset ---
+// ---- Replay support: geometry / username existence / text-at-point / reset --
 
-function handleReplayLocate(msg) {
-  const { el, matchedBy } = resolveSelectorDescriptor(msg.selectorDescriptor);
-  if (!el) {
-    send({ type: "replay_locate_result", corrId: msg.corrId, stepId: msg.stepId, found: false, reason: "no_dom_match" });
-    return;
-  }
-  send({
-    type: "replay_locate_result",
-    corrId: msg.corrId,
-    stepId: msg.stepId,
-    found: true,
-    rectViewport: rectOf(el),
-    windowGeometry: windowGeometry(),
-    confidence: matchedBy === msg.selectorDescriptor.strategy ? "exact" : "fallback",
-    matchedBy,
-  });
+function handleGetWindowGeometry(msg) {
+  send({ type: "window_geometry_result", corrId: msg.corrId, geometry: windowGeometry() });
 }
 
 function findSearchResultRow(username) {
@@ -136,50 +150,36 @@ function findSearchResultRow(username) {
   return { rows: partial, exact: false };
 }
 
-function handleReplayLocateSearchResult(msg) {
-  const emptyState = document.querySelector('[class*="empty" i], [class*="no-result" i]');
+function handleCheckUsernameExists(msg) {
   const { rows, exact } = findSearchResultRow(msg.username);
-
   if (rows.length === 0) {
-    send({ type: "search_result_status", corrId: msg.corrId, status: emptyState ? "not_found" : "not_found" });
+    send({ type: "username_exists_result", corrId: msg.corrId, status: "not_found" });
     return;
   }
   if (rows.length === 1) {
-    send({
-      type: "search_result_status",
-      corrId: msg.corrId,
-      status: "found",
-      rectViewport: rectOf(rows[0]),
-      windowGeometry: windowGeometry(),
-    });
+    send({ type: "username_exists_result", corrId: msg.corrId, status: "found" });
     return;
   }
-  const exactRow = exact ? rows[0] : null;
   send({
-    type: "search_result_status",
+    type: "username_exists_result",
     corrId: msg.corrId,
-    status: "ambiguous",
+    status: exact ? "found" : "ambiguous",
     count: rows.length,
-    exactMatchRect: exactRow ? rectOf(exactRow) : null,
-    windowGeometry: windowGeometry(),
   });
 }
 
-function handleGetTextContent(msg) {
-  const { el } = resolveSelectorDescriptor(msg.selectorDescriptor);
+// Reads text at a fixed viewport point (the same point native is about to
+// click, or just clicked) - used to verify a paste landed, and to verify a
+// message was sent (input goes empty), without matching anything by
+// selector.
+function handleGetTextAtPoint(msg) {
+  const el = document.elementFromPoint(msg.viewportX, msg.viewportY);
   if (!el) {
-    send({ type: "text_content_result", corrId: msg.corrId, text: "", length: 0 });
+    send({ type: "text_at_point_result", corrId: msg.corrId, found: false, text: "" });
     return;
   }
-  const text = el.innerText !== undefined ? el.innerText : el.textContent || "";
-  send({ type: "text_content_result", corrId: msg.corrId, text, length: text.length });
-}
-
-function handleSendVerify(msg) {
-  const prefix = (msg.expectedTextPrefix || "").trim();
-  const bubbles = Array.from(document.querySelectorAll('[class*="message" i][class*="outgoing" i], [class*="message" i][class*="sent" i]'));
-  const sent = bubbles.some((b) => (b.textContent || "").trim().startsWith(prefix));
-  send({ type: "send_verify_result", corrId: msg.corrId, sent });
+  const text = "value" in el ? el.value : el.innerText !== undefined ? el.innerText : el.textContent || "";
+  send({ type: "text_at_point_result", corrId: msg.corrId, found: true, text: text || "" });
 }
 
 function handleResetState(msg) {
@@ -200,17 +200,14 @@ chrome.runtime.onMessage.addListener((msg) => {
     case "stop_recording":
       stopRecording();
       break;
-    case "replay_locate":
-      handleReplayLocate(msg);
+    case "get_window_geometry":
+      handleGetWindowGeometry(msg);
       break;
-    case "replay_locate_search_result":
-      handleReplayLocateSearchResult(msg);
+    case "check_username_exists":
+      handleCheckUsernameExists(msg);
       break;
-    case "get_text_content":
-      handleGetTextContent(msg);
-      break;
-    case "send_verify":
-      handleSendVerify(msg);
+    case "get_text_at_point":
+      handleGetTextAtPoint(msg);
       break;
     case "reset_state":
       handleResetState(msg);

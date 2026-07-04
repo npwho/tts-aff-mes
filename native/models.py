@@ -1,68 +1,32 @@
 """Shared dataclasses for the native automation tool."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
-
-
-@dataclass
-class SelectorDescriptor:
-    """Resilient element descriptor recorded from a real user action.
-
-    `strategy` records which attribute/heuristic produced `value`, tried in this
-    preference order during replay: data-testid/aria-label > stable id > text
-    content scoped to an ancestor > structural/role-based fallback.
-    """
-
-    strategy: str
-    value: str
-    attributes: dict = field(default_factory=dict)
-    text_content: Optional[str] = None
-    ancestor_path: Optional[str] = None
-    hint_rect: Optional[dict] = None
-
-    def to_dict(self) -> dict:
-        # Wire format is camelCase (matches every other field in the protocol
-        # and what extension/content.js's resolveSelectorDescriptor reads:
-        # desc.textContent / desc.ancestorPath). Using dataclasses.asdict()
-        # here would emit the Python-side snake_case field names instead,
-        # which the extension silently treats as undefined - breaking the
-        # text-match and structural fallback strategies on replay.
-        return {
-            "strategy": self.strategy,
-            "value": self.value,
-            "attributes": self.attributes,
-            "textContent": self.text_content,
-            "ancestorPath": self.ancestor_path,
-            "hintRect": self.hint_rect,
-        }
-
-    @staticmethod
-    def from_dict(d: dict) -> "SelectorDescriptor":
-        return SelectorDescriptor(
-            strategy=d["strategy"],
-            value=d["value"],
-            attributes=d.get("attributes", {}),
-            text_content=d.get("textContent") or d.get("text_content"),
-            ancestor_path=d.get("ancestorPath") or d.get("ancestor_path"),
-            hint_rect=d.get("hintRect") or d.get("hint_rect"),
-        )
+from dataclasses import dataclass
 
 
 @dataclass
 class ActionStep:
-    """One step of the generic, replayable action script."""
+    """One step of the replayable action script.
+
+    Stores the recorded element's viewport-relative rect directly - no
+    selector, no DOM matching. Replay converts this rect to a real screen
+    coordinate using the browser window's *current* geometry (see
+    geometry.py) and clicks there. Positions inside TikTok's messaging
+    dialog are stable once it's open, so this is far more reliable than
+    re-locating elements by CSS selector, which broke repeatedly on
+    TikTok's generated/state-dependent class names.
+    """
 
     step_id: int
-    kind: str  # CLICK | HOVER_THEN_CLICK | FOCUS_AND_PASTE | PASTE_MULTILINE_THEN_ENTER
-    selector: SelectorDescriptor
+    kind: str  # CLICK | HOVER_THEN_CLICK | FOCUS_AND_PASTE | PASTE_USERNAME | PASTE_MULTILINE_THEN_ENTER
+    rect_viewport: dict  # {x, y, w, h} in CSS px, as recorded
     notes: str = ""
 
     def to_dict(self) -> dict:
         return {
             "stepId": self.step_id,
             "kind": self.kind,
-            "selector": self.selector.to_dict(),
+            "rectViewport": self.rect_viewport,
             "notes": self.notes,
         }
 
@@ -71,7 +35,7 @@ class ActionStep:
         return ActionStep(
             step_id=d["stepId"],
             kind=d["kind"],
-            selector=SelectorDescriptor.from_dict(d["selector"]),
+            rect_viewport=d.get("rectViewport") or d.get("rect_viewport"),
             notes=d.get("notes", ""),
         )
 
@@ -80,7 +44,6 @@ class ActionStep:
 class RunResult:
     username: str
     status: str
-    matched_by_fallback: bool = False
     timestamp_start: str = ""
     timestamp_end: str = ""
     notes: str = ""
@@ -89,7 +52,6 @@ class RunResult:
         return [
             self.username,
             self.status,
-            self.matched_by_fallback,
             self.timestamp_start,
             self.timestamp_end,
             self.notes,
@@ -99,7 +61,6 @@ class RunResult:
 CSV_HEADER = [
     "username",
     "status",
-    "matchedBySelectorFallback",
     "timestamp_start",
     "timestamp_end",
     "notes",

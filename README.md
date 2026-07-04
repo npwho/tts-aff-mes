@@ -13,6 +13,16 @@ TikTok's captcha):
   human), driven by what the extension reports over a local WebSocket
   connection (`ws://127.0.0.1:8765`).
 
+There's no CSS-selector matching anywhere in the replay path. TikTok's
+generated/state-dependent class names made re-locating elements by selector
+unreliable in practice (a class can exist only while a tooltip happens to be
+showing, or only while an input is focused). Instead, the native tool clicks
+*fixed viewport positions* recorded once during the Record step, converted to
+a real screen coordinate against the browser window's live on-screen position
+every single time. The extension's only job during replay is answering "does
+this username exist" and reading back text at a point to verify a
+paste/send — never "where is this element now."
+
 See `docs/protocol.md` for the full message schema between the two, and the
 plan file this was built from for the design rationale.
 
@@ -31,14 +41,12 @@ plan file this was built from for the design rationale.
    python -m native.main
    ```
 
-There's no manual calibration step: the extension reports the browser
-window's actual on-screen geometry (position, size, zoom) alongside every
-element it locates, so the native tool converts a page coordinate into a
-real screen coordinate fresh on every single click. Moving or resizing the
-browser window mid-run is handled automatically. (An earlier version used a
-one-time, hand-calibrated 2-point transform — it was dropped because it
-depended on a human precisely hovering a small on-page marker, which was an
-unreliable source of offset in practice.)
+There's no manual calibration step either: the extension reports the browser
+window's actual on-screen geometry alongside the request, and the native
+side *measures* (rather than assumes) the scale between its own coordinate
+space and the browser's, so it's correct even if Windows' per-process DPI
+awareness didn't take effect the way you'd expect. Moving the browser window
+mid-run is handled automatically, since geometry is re-fetched on every click.
 
 ## Usage (run in this order every session)
 
@@ -67,8 +75,8 @@ unreliable source of offset in practice.)
 - Default pacing is conservative (randomized 8-20s between usernames, plus
   occasional longer breaks) — tune `native/config.py` if you want to go
   faster, at your own risk of platform rate-limiting.
-- The coordinate math assumes the browser window has no left/right chrome
-  (true for virtually all normal browser windows) and that
-  `devicePixelRatio` correctly reflects the monitor the window is on. If
-  clicks still land off-target, check Windows display scaling and try
-  moving the browser window to your primary monitor.
+- **Don't resize the browser window or change zoom between recording and
+  replay** — the recorded click positions are fixed viewport coordinates, so
+  a different window size/zoom shifts where everything actually is on the
+  page. Moving the window (without resizing) is fine. Re-record if you
+  change either.

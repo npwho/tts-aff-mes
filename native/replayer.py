@@ -1,11 +1,15 @@
-"""Per-username locate-then-act replay loop (docs/protocol.md: replay phase).
+"""Per-username replay loop (docs/protocol.md: replay phase).
 
-Never caches a DOM reference across steps - every step re-queries the live
-page right before acting, which is what makes this robust to TikTok's SPA
-re-rendering between usernames.
+Clicks fixed viewport positions recorded during the Record step, converted
+to a real screen coordinate against the browser window's *current*
+geometry (see geometry.py) on every single click - no selector matching at
+all. The extension is only asked to answer "does this username exist" and
+to read back text at a point for paste/send verification, never to
+re-locate an element.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import datetime
 import logging
@@ -34,7 +38,6 @@ class Replayer:
         self.browser_hwnd = browser_hwnd
         self.dry_run = dry_run
         self._abort = False
-        self._last_row_rect_screen: tuple[float, float] | None = None
 
         bridge.on("captcha_detected", self._on_captcha)
         bridge.on("heartbeat_lost", self._on_heartbeat_lost)
@@ -51,24 +54,15 @@ class Replayer:
         log.warning("Extension connection lost - pausing run")
         self._abort = True
 
-    async def _locate(self, step: ActionStep) -> dict:
-        return await self.bridge.request(
-            "replay_locate",
-            {"stepId": step.step_id, "selectorDescriptor": step.selector.to_dict()},
-            timeout=config.LOCATE_TIMEOUT_S,
-        )
+    async def _screen_point(self, rect: dict) -> tuple[float, float]:
+        resp = await self.bridge.request("get_window_geometry", {}, timeout=config.REQUEST_TIMEOUT_S)
+        sx, sy = geometry.viewport_rect_to_screen(rect, resp["geometry"])
+        log.info("rect=%s geometry=%s -> screen=(%.0f, %.0f)", rect, resp["geometry"], sx, sy)
+        return sx, sy
 
-    async def _click_step(self, step: ActionStep) -> bool:
-        result = await self._locate(step)
-        if not result.get("found"):
-            return False
-        sx, sy = geometry.viewport_rect_to_screen(result["rectViewport"], result["windowGeometry"])
-        log.info(
-            "step %s (%s): rect=%s geometry=%s -> screen=(%.0f, %.0f)",
-            step.step_id, step.kind, result["rectViewport"], result["windowGeometry"], sx, sy,
-        )
-        automation.click(sx, sy)
-        return True
+    async def _click_rect(self, rect: dict, jitter: bool = True) -> None:
+        sx, sy = await self._screen_point(rect)
+        automation.click(sx, sy, jitter=jitter)
 
     async def _check_foreground(self) -> bool:
         if automation.is_browser_foreground(self.browser_hwnd):
@@ -82,11 +76,19 @@ class Replayer:
     async def _reset_state(self) -> bool:
         automation.press_escape()
         for _ in range(config.RESET_VERIFY_RETRIES):
-            resp = await self.bridge.request("reset_state", {}, timeout=config.LOCATE_TIMEOUT_S)
+            resp = await self.bridge.request("reset_state", {}, timeout=config.REQUEST_TIMEOUT_S)
             if not resp.get("dialogOpen"):
                 return True
             automation.press_escape()
         return False
+
+    async def _text_at_rect(self, rect: dict) -> str:
+        cx = rect["x"] + rect["w"] / 2
+        cy = rect["y"] + rect["h"] / 2
+        resp = await self.bridge.request(
+            "get_text_at_point", {"viewportX": cx, "viewportY": cy}, timeout=config.REQUEST_TIMEOUT_S
+        )
+        return resp.get("text", "")
 
     async def run_one(self, username: str, message: str) -> RunResult:
         start = datetime.datetime.now().isoformat(timespec="seconds")
@@ -102,19 +104,13 @@ class Replayer:
                 raise AbortRun()
 
             if step.kind in ("CLICK", "FOCUS_AND_PASTE"):
-                ok = await self._click_step(step)
-                if not ok:
-                    end = datetime.datetime.now().isoformat(timespec="seconds")
-                    await self._reset_state()
-                    return RunResult(
-                        username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
-                        timestamp_end=end, notes=f"step {step.step_id} ({step.kind}) not found",
-                    )
+                await self._click_rect(step.rect_viewport)
 
             elif step.kind == "PASTE_USERNAME":
+                await self._click_rect(step.rect_viewport)
                 automation.paste_text(username)
                 search = await self.bridge.request(
-                    "replay_locate_search_result", {"username": username},
+                    "check_username_exists", {"username": username},
                     timeout=config.SEARCH_RESULT_TIMEOUT_S,
                 )
                 status = search.get("status")
@@ -122,42 +118,21 @@ class Replayer:
                 if status == "not_found":
                     await self._reset_state()
                     return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)
-                if status == "ambiguous" and not search.get("exactMatchRect"):
+                if status == "ambiguous":
                     await self._reset_state()
                     return RunResult(
                         username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start,
                         timestamp_end=end, notes=f"ambiguous match, count={search.get('count')}",
                     )
-                rect = search.get("exactMatchRect") or search.get("rectViewport")
-                self._last_row_rect_screen = geometry.viewport_rect_to_screen(rect, search["windowGeometry"])
-                log.info(
-                    "search result row: rect=%s geometry=%s -> screen=%s",
-                    rect, search["windowGeometry"], self._last_row_rect_screen,
-                )
 
             elif step.kind == "HOVER_THEN_CLICK":
-                if self._last_row_rect_screen is None:
-                    end = datetime.datetime.now().isoformat(timespec="seconds")
-                    await self._reset_state()
-                    return RunResult(
-                        username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
-                        timestamp_end=end, notes="no search result row to hover",
-                    )
-                automation.move_to(*self._last_row_rect_screen)
+                # The recorded rect is the Chat button's own position, which
+                # lies inside the result row - moving the cursor there is
+                # itself what triggers the row's hover reveal, so there's no
+                # need for a separate "row" position at all.
+                sx, sy = await self._screen_point(step.rect_viewport)
+                automation.move_to(sx, sy)
                 automation.hover_settle()
-                result = await self._locate(step)
-                if not result.get("found"):
-                    end = datetime.datetime.now().isoformat(timespec="seconds")
-                    await self._reset_state()
-                    return RunResult(
-                        username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
-                        timestamp_end=end, notes="Chat button not revealed after hover",
-                    )
-                sx, sy = geometry.viewport_rect_to_screen(result["rectViewport"], result["windowGeometry"])
-                log.info(
-                    "Chat button: rect=%s geometry=%s -> screen=(%.0f, %.0f)",
-                    result["rectViewport"], result["windowGeometry"], sx, sy,
-                )
                 automation.click(sx, sy, jitter=True)
 
             elif step.kind == "PASTE_MULTILINE_THEN_ENTER":
@@ -170,13 +145,10 @@ class Replayer:
                         timestamp_end=end, notes=f"reached message box, would send: {preview}",
                     )
 
+                await self._click_rect(step.rect_viewport)
                 automation.paste_text(message)
-                readback = await self.bridge.request(
-                    "get_text_content", {"selectorDescriptor": step.selector.to_dict()},
-                    timeout=config.LOCATE_TIMEOUT_S,
-                )
-                pasted_ok = readback.get("text", "").strip().startswith(message.strip()[:40])
-                if not pasted_ok:
+                pasted_text = await self._text_at_rect(step.rect_viewport)
+                if not pasted_text.strip().startswith(message.strip()[:40]):
                     end = datetime.datetime.now().isoformat(timespec="seconds")
                     await self._reset_state()
                     return RunResult(
@@ -184,13 +156,11 @@ class Replayer:
                         timestamp_end=end, notes="paste into message box did not verify",
                     )
                 automation.press_enter()
-                verify = await self.bridge.request(
-                    "send_verify", {"expectedTextPrefix": message.strip()[:40]},
-                    timeout=config.SEND_VERIFY_TIMEOUT_S,
-                )
+                await asyncio.sleep(config.SEND_VERIFY_WAIT_S)
+                remaining_text = await self._text_at_rect(step.rect_viewport)
                 end = datetime.datetime.now().isoformat(timespec="seconds")
                 await self._reset_state()
-                if verify.get("sent"):
+                if remaining_text.strip() == "":
                     return RunResult(username, config.STATUS_SENT, timestamp_start=start, timestamp_end=end)
                 return RunResult(username, config.STATUS_FAILED_SEND_UNCONFIRMED, timestamp_start=start, timestamp_end=end)
 

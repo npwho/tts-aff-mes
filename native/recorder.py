@@ -1,13 +1,19 @@
 """Turns the observed event stream from the user's first, manual creator run
 into a generic, ordered ActionStep script (docs/protocol.md: recording phase).
+
+Each step stores only the recorded element's viewport rect - no CSS
+selector. Replay clicks fixed positions (re-anchored live against the
+browser window's current geometry), and relies on the extension only to
+answer "does this username exist" - not to re-locate anything by selector.
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
 
 from .config import ACTION_SCRIPT_PATH
-from .models import ActionStep, SelectorDescriptor
+from .models import ActionStep
 from .ws_server import NativeBridge
 
 log = logging.getLogger("recorder")
@@ -16,9 +22,20 @@ log = logging.getLogger("recorder")
 # result row - this is the "Chat" button case called out by the user.
 HOVER_REVEAL_KEYWORDS = {"chat", "message"}
 
+# How close two rects' centers need to be (CSS px) to be treated as "the
+# same element" for dedupe purposes (e.g. a focus immediately followed by
+# a click on the same input).
+SAME_ELEMENT_DISTANCE_PX = 6
 
-def _same_selector(a: dict, b: dict) -> bool:
-    return a.get("strategy") == b.get("strategy") and a.get("value") == b.get("value")
+
+def _rect_center(rect: dict) -> tuple[float, float]:
+    return (rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2)
+
+
+def _same_element(a: dict, b: dict) -> bool:
+    ax, ay = _rect_center(a)
+    bx, by = _rect_center(b)
+    return math.hypot(ax - bx, ay - by) <= SAME_ELEMENT_DISTANCE_PX
 
 
 class Recorder:
@@ -51,20 +68,21 @@ class Recorder:
         paste_count = 0
         # Exactly two pastes are expected in the recorded flow: the username
         # into the search box (first), then the message into the chat box
-        # (last, followed by the user pressing Enter to send). Order is the
-        # only reliable signal available, since the content script never
-        # reports the actual pasted text back (kept intentionally read-only
-        # and privacy-light).
+        # (last). Order is the only reliable signal available, since the
+        # content script never reports the actual pasted text back (kept
+        # intentionally read-only and privacy-light).
         for i, ev in enumerate(raw_events):
             event_type = ev.get("eventType")
-            selector = ev.get("selector", {})
+            rect = ev.get("rectViewport")
+            if not rect:
+                continue
 
             if event_type == "focus":
                 nxt = raw_events[i + 1] if i + 1 < n else None
                 # Dedupe a focus immediately followed by a click/paste on the
                 # same element - keep only the more informative later event.
-                if nxt and nxt.get("eventType") in ("click", "paste") and _same_selector(
-                    nxt.get("selector", {}), selector
+                if nxt and nxt.get("eventType") in ("click", "paste") and nxt.get("rectViewport") and _same_element(
+                    nxt["rectViewport"], rect
                 ):
                     continue
                 kind = "FOCUS_AND_PASTE"
@@ -72,7 +90,7 @@ class Recorder:
                 paste_count += 1
                 kind = "PASTE_USERNAME" if paste_count == 1 else "PASTE_MULTILINE_THEN_ENTER"
             elif event_type == "click":
-                text = (selector.get("textContent") or "").strip().lower()
+                text = (ev.get("text") or "").strip().lower()
                 kind = "HOVER_THEN_CLICK" if text in HOVER_REVEAL_KEYWORDS else "CLICK"
             else:
                 continue
@@ -81,7 +99,7 @@ class Recorder:
                 ActionStep(
                     step_id=len(steps) + 1,
                     kind=kind,
-                    selector=SelectorDescriptor.from_dict(selector),
+                    rect_viewport=rect,
                     notes=f"recorded from {event_type}",
                 )
             )
@@ -103,6 +121,6 @@ class Recorder:
     def describe(steps: list[ActionStep]) -> str:
         lines = []
         for s in steps:
-            label = s.selector.text_content or s.selector.value
-            lines.append(f"{s.step_id}. [{s.kind}] {label}")
+            r = s.rect_viewport
+            lines.append(f"{s.step_id}. [{s.kind}] at viewport ({r['x']:.0f}, {r['y']:.0f}) size {r['w']:.0f}x{r['h']:.0f}")
         return "\n".join(lines)

@@ -17,7 +17,7 @@
         "https://affiliate.tiktok.com/*",
         "https://*.tiktok.com/*"
       ],
-      "js": ["selector-utils.js", "content.js"],
+      "js": ["content.js"],
       "run_at": "document_idle"
     }
   ]
