@@ -82,6 +82,11 @@ class App(tk.Tk):
         self.btn_start.pack(side="left", padx=4)
         self.btn_stop = tk.Button(btn_row, text="Stop", command=self._stop_replay, bg="#b71c1c", fg="white")
         self.btn_stop.pack(side="left", padx=4)
+        self.dry_run_var = tk.BooleanVar(value=False)
+        self.chk_dry_run = tk.Checkbutton(
+            btn_row, text="Dry run (click through, don't paste/send message)", variable=self.dry_run_var
+        )
+        self.chk_dry_run.pack(side="left", padx=12)
 
         log_frame = tk.LabelFrame(self, text="Log")
         log_frame.pack(fill="both", expand=True, padx=8, pady=4)
@@ -181,12 +186,13 @@ class App(tk.Tk):
             return
         usernames = [u.strip() for u in self.usernames_text.get("1.0", "end").splitlines() if u.strip()]
         message = self.message_text.get("1.0", "end").rstrip("\n")
-        if not usernames or not message:
+        dry_run = self.dry_run_var.get()
+        if not usernames or (not message and not dry_run):
             messagebox.showerror("Missing input", "Provide at least one username and a message.")
             return
 
-        self.replayer = Replayer(self.bridge, self.transform, steps, browser_hwnd=self.browser_hwnd)
-        self._log(f"Starting replay for {len(usernames)} usernames.")
+        self.replayer = Replayer(self.bridge, self.transform, steps, browser_hwnd=self.browser_hwnd, dry_run=dry_run)
+        self._log(f"Starting {'DRY RUN ' if dry_run else ''}replay for {len(usernames)} usernames.")
         self._run_async(self._do_replay(usernames, message))
 
     async def _do_replay(self, usernames: list[str], message: str) -> None:
@@ -194,8 +200,10 @@ class App(tk.Tk):
             self.after(0, lambda: self._log(f"{result.username}: {result.status} ({result.notes})"))
 
         results = await self.replayer.run(usernames, message, on_progress=on_progress)
-        sent = sum(1 for r in results if r.status == config.STATUS_SENT)
-        self.after(0, lambda: self._log(f"Run finished: {sent}/{len(results)} sent. See native/logs/ for the full CSV."))
+        ok_statuses = (config.STATUS_SENT, config.STATUS_DRY_RUN_OK)
+        ok = sum(1 for r in results if r.status in ok_statuses)
+        label = "reached message step" if self.replayer.dry_run else "sent"
+        self.after(0, lambda: self._log(f"Run finished: {ok}/{len(results)} {label}. See native/logs/ for the full CSV."))
 
     def _stop_replay(self) -> None:
         if self.replayer:

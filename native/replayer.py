@@ -28,11 +28,13 @@ class Replayer:
         transform: CalibrationTransform,
         steps: list[ActionStep],
         browser_hwnd: int | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.bridge = bridge
         self.transform = transform
         self.steps = steps
         self.browser_hwnd = browser_hwnd
+        self.dry_run = dry_run
         self._abort = False
         self._last_row_rect_screen: tuple[float, float] | None = None
 
@@ -148,6 +150,15 @@ class Replayer:
                 automation.click(sx, sy, jitter=True)
 
             elif step.kind == "PASTE_MULTILINE_THEN_ENTER":
+                if self.dry_run:
+                    end = datetime.datetime.now().isoformat(timespec="seconds")
+                    await self._reset_state()
+                    preview = (message.strip()[:60] + "...") if message.strip() else "(no message provided)"
+                    return RunResult(
+                        username, config.STATUS_DRY_RUN_OK, timestamp_start=start,
+                        timestamp_end=end, notes=f"reached message box, would send: {preview}",
+                    )
+
                 automation.paste_text(message)
                 readback = await self.bridge.request(
                     "get_text_content", {"selectorDescriptor": step.selector.to_dict()},
