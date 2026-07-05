@@ -78,6 +78,13 @@ class App(tk.Tk):
             variable=self.dry_run_var,
         )
         self.chk_dry_run.pack(side="left", padx=12)
+        self.search_only_var = tk.BooleanVar(value=False)
+        self.chk_search_only = tk.Checkbutton(
+            btn_row,
+            text="Dry run all usernames (search + click Chat only, no message/send)",
+            variable=self.search_only_var,
+        )
+        self.chk_search_only.pack(side="left", padx=12)
 
         log_frame = tk.LabelFrame(self, text="Log")
         log_frame.pack(fill="both", expand=True, padx=8, pady=4)
@@ -202,14 +209,16 @@ class App(tk.Tk):
         usernames = [u.strip() for u in self.usernames_text.get("1.0", "end").splitlines() if u.strip()]
         message = self.message_text.get("1.0", "end").rstrip("\n")
         dry_run = self.dry_run_var.get()
-        if not usernames or (not message and not dry_run):
+        search_only = self.search_only_var.get()
+        if not usernames or (not message and not dry_run and not search_only):
             messagebox.showerror("Missing input", "Provide at least one username and a message.")
             return
 
-        self.replayer = Replayer(flow, dry_run=dry_run)
+        self.replayer = Replayer(flow, dry_run=dry_run, search_only=search_only)
         self.replayer.on_pause_requested = self._on_replay_paused
-        count = 1 if dry_run else len(usernames)
-        self._log(f"Starting {'DRY RUN ' if dry_run else ''}replay for {count} username(s).")
+        count = len(usernames) if search_only else (1 if dry_run else len(usernames))
+        mode_label = "SEARCH-ONLY " if search_only else ("DRY RUN " if dry_run else "")
+        self._log(f"Starting {mode_label}replay for {count} username(s).")
         self._run_bg(self._do_replay, usernames, message)
 
     def _on_replay_paused(self, message: str) -> None:
@@ -233,11 +242,16 @@ class App(tk.Tk):
             self.after(0, lambda: self._log(f"{result.username}: {result.status} ({result.notes})"))
 
         results = self.replayer.run(usernames, message, on_progress=on_progress)
-        ok_statuses = (config.STATUS_SENT, config.STATUS_DRY_RUN_OK)
+        ok_statuses = (config.STATUS_SENT, config.STATUS_DRY_RUN_OK, config.STATUS_FOUND)
         ok = [r for r in results if r.status in ok_statuses]
         not_found = [r for r in results if r.status == config.STATUS_SKIPPED_NOT_FOUND]
         other = [r for r in results if r not in ok and r not in not_found]
-        label = "reached Send" if self.replayer.dry_run else "sent"
+        if self.replayer.search_only:
+            label = "found"
+        elif self.replayer.dry_run:
+            label = "reached Send"
+        else:
+            label = "sent"
 
         def summarize():
             self._log(f"Run finished: {len(ok)}/{len(results)} {label}.")

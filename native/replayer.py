@@ -16,6 +16,13 @@ directly, with no image verification at all.
 button's template never appearing after hovering - there's no DOM-based
 existence check anymore. Sending isn't verified either; Send is clicked and
 the run moves on.
+
+Two independent test modes, both on Replayer:
+- dry_run: exercises only the first username in the list, clicks Send for
+  real with the message left empty (most chat UIs no-op on an empty send).
+- search_only: exercises every username in the list - New message, search,
+  click Chat (confirming the thread actually opens) - but never touches the
+  message input or Send.
 """
 from __future__ import annotations
 
@@ -40,9 +47,14 @@ class AbortRun(Exception):
 
 
 class Replayer:
-    def __init__(self, flow: RecordedFlow, dry_run: bool = False) -> None:
+    def __init__(self, flow: RecordedFlow, dry_run: bool = False, search_only: bool = False) -> None:
         self.flow = flow
         self.dry_run = dry_run
+        # Clicks New message, searches, and clicks Chat (confirming the
+        # thread actually opens) for every username - but never touches
+        # the message input or Send. Unlike dry_run, this runs the WHOLE
+        # list, not just the first username.
+        self.search_only = search_only
         self._abort = False
         self._scale: tuple[float, float] | None = None
         self._templates = [load_template(p.template_path) for p in flow.points]
@@ -104,16 +116,15 @@ class Replayer:
         time.sleep(config.FIXED_STEP_WAIT_S)
         automation.click(point.mouse_x, point.mouse_y)
 
-    def _click_chat_button(self) -> bool:
+    def _chat_button_visible(self) -> bool:
         """Only appears on :hover. Checks once at the recorded position
-        with no wiggling - if it's already visible, click it immediately.
-        Only if it's NOT visible does it wiggle the mouse away and back
-        (a single teleport onto the spot doesn't reliably fire the
+        with no wiggling - if it's already visible, that's an immediate
+        yes. Only if it's NOT visible does it wiggle the mouse away and
+        back (a single teleport onto the spot doesn't reliably fire the
         mouseenter/mouseover that reveals it), up to a fixed number of
-        attempts - not a time-based wait. Always clicks the originally
-        recorded coordinate (see _click_step for why), never a matched
-        position - the point we hover to reveal it is exactly where it
-        renders, so there's nothing to relocate to anyway."""
+        attempts - not a time-based wait. Pure detection, no click - used
+        both by _click_chat_button and by the search-only flow, which
+        needs found/not-found without ever entering the chat thread."""
         point = self.flow.points[STEP_CHAT_BUTTON]
         template = self._templates[STEP_CHAT_BUTTON]
         expected_x, expected_y = geometry.mouse_to_shot(point.mouse_x, point.mouse_y, self._scale)
@@ -130,8 +141,16 @@ class Replayer:
             result = template_match.find_once(template, expected_x, expected_y)
             attempts += 1
 
-        if result is None:
+        return result is not None
+
+    def _click_chat_button(self) -> bool:
+        """Always clicks the originally recorded coordinate (see
+        _click_step for why), never a matched position - the point we
+        hover to reveal it is exactly where it renders, so there's nothing
+        to relocate to anyway."""
+        if not self._chat_button_visible():
             return False
+        point = self.flow.points[STEP_CHAT_BUTTON]
         automation.click(point.mouse_x, point.mouse_y)
         return True
 
@@ -212,6 +231,16 @@ class Replayer:
             return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)
         automation.api_settle_delay()
 
+        if self.search_only:
+            # Confirmed found and the thread opened - that's all this mode
+            # checks. Never touches the message input or Send. The thread
+            # is now open (not the search dialog), so the next username
+            # needs a fresh New message click.
+            end = datetime.datetime.now().isoformat(timespec="seconds")
+            self._dialog_open = False
+            self._reset_state()
+            return RunResult(username, config.STATUS_FOUND, timestamp_start=start, timestamp_end=end, notes="found (search only)")
+
         if self._abort:
             raise AbortRun()
 
@@ -258,9 +287,11 @@ class Replayer:
 
     def run(self, usernames: list[str], message: str, on_progress=None) -> list[RunResult]:
         self._dialog_open = False
-        # A dry run only ever exercises the first username - it's a
-        # click-path sanity check, not a batch operation.
-        if self.dry_run:
+        # A plain dry run only ever exercises the first username - it's a
+        # click-path sanity check, not a batch operation. search_only runs
+        # the whole list (that's the point of it), even if dry_run is also
+        # set.
+        if self.dry_run and not self.search_only:
             usernames = usernames[:1]
 
         config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -291,10 +322,10 @@ class Replayer:
                     on_progress(result)
 
                 if i < len(usernames) - 1 and not self._abort:
-                    if result.status == config.STATUS_SENT:
-                        # Already confirmed sent - no need for the long
-                        # randomized inter-user pacing, just a brief beat
-                        # before starting the next one.
+                    if result.status in (config.STATUS_SENT, config.STATUS_FOUND):
+                        # Confirmed outcome, nothing more to verify - no
+                        # need for the long randomized inter-user pacing,
+                        # just a brief beat before starting the next one.
                         time.sleep(config.SUCCESS_NEXT_USER_DELAY_S)
                     else:
                         automation.between_username_delay()
