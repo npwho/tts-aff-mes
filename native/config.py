@@ -38,6 +38,13 @@ API_SETTLE_DELAY_S = 0.8
 
 RESET_VERIFY_RETRIES = 3
 
+# Hover-reveal wiggle (automation.hover_reveal) - used for the Chat button,
+# which only appears on :hover and doesn't reliably show up from the
+# cursor just teleporting directly onto it.
+HOVER_REVEAL_OFFSET_PX = 200
+HOVER_REVEAL_REPEATS = 3
+HOVER_REVEAL_PAUSE_S = 0.15
+
 # Template matching (native/template_match.py).
 TEMPLATE_PATCH_RADIUS_PX = 30
 TEMPLATE_SEARCH_MARGIN_PX = 150

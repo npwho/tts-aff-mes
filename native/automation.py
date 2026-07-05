@@ -158,6 +158,26 @@ def inter_step_delay() -> None:
     time.sleep(random.uniform(config.INTER_STEP_DELAY_MIN_S, config.INTER_STEP_DELAY_MAX_S))
 
 
+def hover_reveal(
+    x: float,
+    y: float,
+    offset: float = config.HOVER_REVEAL_OFFSET_PX,
+    repeats: int = config.HOVER_REVEAL_REPEATS,
+    pause: float = config.HOVER_REVEAL_PAUSE_S,
+) -> None:
+    """Some hover-revealed elements (e.g. a chat button that only appears on
+    :hover) don't reliably show up just from the cursor teleporting directly
+    onto them - moving away and back several times is a much closer match
+    to a real hover gesture and more reliably fires whatever
+    mouseenter/mouseover handling reveals the element."""
+    away_y = y - offset if y - offset > 0 else y + offset
+    for _ in range(repeats):
+        move_to(x, away_y, jitter=False)
+        time.sleep(pause)
+        move_to(x, y, jitter=True)
+        time.sleep(pause)
+
+
 def api_settle_delay() -> None:
     """Short pause right after an action that triggers an API call (pasting
     a username to search, clicking Chat to open a thread), before polling
