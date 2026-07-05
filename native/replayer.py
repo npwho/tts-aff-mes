@@ -144,7 +144,7 @@ class Replayer:
         for _ in range(3):
             if automation.is_browser_foreground(self.flow.browser_hwnd):
                 return True
-            time.sleep(0.3)
+            time.sleep(0.15)
         return automation.activate_browser_window(self.flow.browser_hwnd)
 
     def _reset_state(self) -> None:
@@ -155,7 +155,7 @@ class Replayer:
         # next username's flow starts clicking again.
         for _ in range(3):
             automation.press_escape()
-            time.sleep(0.3)
+            time.sleep(0.15)
 
     def run_one(self, username: str, message: str) -> RunResult:
         start = datetime.datetime.now().isoformat(timespec="seconds")

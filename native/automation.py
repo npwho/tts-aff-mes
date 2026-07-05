@@ -82,7 +82,7 @@ def activate_browser_window(hwnd: int | None) -> bool:
         x = left + max(100, (right - left) // 4)
         y = top + 10
         click(x, y, jitter=False)
-        time.sleep(0.2)
+        time.sleep(0.15)
         return win32gui.GetForegroundWindow() == hwnd
     except Exception:
         return True
@@ -208,11 +208,15 @@ def paste_text(text: str) -> None:
     worth the convenience.
     """
     pyperclip.copy(text)
-    time.sleep(0.1)
+    time.sleep(0.05)
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("v")
         _keyboard.release("v")
-    time.sleep(0.3)
+    # Deliberately NOT cut aggressively: this delay is what stands between
+    # the paste actually completing and the next action - too short a
+    # value here was a confirmed real bug (a race that let stale clipboard
+    # content get pasted). Speed elsewhere, not here.
+    time.sleep(0.25)
 
 
 def select_all() -> None:
@@ -222,7 +226,7 @@ def select_all() -> None:
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("a")
         _keyboard.release("a")
-    time.sleep(0.1)
+    time.sleep(0.06)
 
 
 def select_all_and_delete() -> None:
@@ -234,7 +238,7 @@ def select_all_and_delete() -> None:
     select_all()
     _keyboard.press(Key.backspace)
     _keyboard.release(Key.backspace)
-    time.sleep(0.1)
+    time.sleep(0.06)
 
 
 _READBACK_SENTINEL = "\x00__tts_aff_mes_readback_sentinel__\x00"
@@ -257,11 +261,11 @@ def read_focused_field() -> str:
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("a")
         _keyboard.release("a")
-    time.sleep(0.1)
+    time.sleep(0.08)
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("c")
         _keyboard.release("c")
-    time.sleep(0.2)
+    time.sleep(0.15)
     try:
         result = pyperclip.paste()
     except Exception:
