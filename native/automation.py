@@ -215,6 +215,53 @@ def paste_text(text: str) -> None:
     time.sleep(0.3)
 
 
+def read_focused_field() -> str:
+    """Ctrl+A then Ctrl+C on whatever's currently focused, returns the
+    clipboard afterward - a DOM-free way to read back what a field actually
+    contains, used to verify a paste landed correctly."""
+    with _keyboard.pressed(Key.ctrl):
+        _keyboard.press("a")
+        _keyboard.release("a")
+    time.sleep(0.1)
+    with _keyboard.pressed(Key.ctrl):
+        _keyboard.press("c")
+        _keyboard.release("c")
+    time.sleep(0.2)
+    try:
+        return pyperclip.paste()
+    except Exception:
+        return ""
+
+
+def clear_focused_field() -> None:
+    """Ctrl+A then Backspace on whatever's currently focused."""
+    with _keyboard.pressed(Key.ctrl):
+        _keyboard.press("a")
+        _keyboard.release("a")
+    time.sleep(0.1)
+    _keyboard.press(Key.backspace)
+    _keyboard.release(Key.backspace)
+    time.sleep(0.1)
+
+
+def paste_text_and_verify(text: str, max_attempts: int = 3) -> bool:
+    """Pastes text, then reads the field back (read_focused_field) to
+    confirm it actually landed - there's no DOM to check this against
+    otherwise. Clears the field and retries on a mismatch, up to
+    max_attempts. Returns True once verified, False if it never matched."""
+    for attempt in range(1, max_attempts + 1):
+        paste_text(text)
+        actual = read_focused_field()
+        if actual.strip() == text.strip():
+            _keyboard.press(Key.end)
+            _keyboard.release(Key.end)
+            return True
+        log.warning("paste verification mismatch on attempt %d/%d", attempt, max_attempts)
+        if attempt < max_attempts:
+            clear_focused_field()
+    return False
+
+
 def press_enter() -> None:
     _keyboard.press(Key.enter)
     _keyboard.release(Key.enter)

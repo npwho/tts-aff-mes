@@ -10,9 +10,14 @@ RECORDED_FLOW_PATH = STORAGE_DIR / "recorded_flow.json"
 PREVIEW_IMAGE_PATH = STORAGE_DIR / "recording_preview.png"
 LAST_INPUT_PATH = STORAGE_DIR / "last_input.json"
 
-# Pacing between usernames during replay (randomized within this range).
+# Pacing between usernames during replay (randomized within this range) -
+# used for skipped/failed usernames only.
 MIN_DELAY_BETWEEN_USERNAMES_S = 8
 MAX_DELAY_BETWEEN_USERNAMES_S = 20
+
+# After a *successful* send, move on to the next username almost
+# immediately instead of the long randomized delay above.
+SUCCESS_NEXT_USER_DELAY_S = 0.5
 
 # Every N usernames, insert one longer "human break" pause.
 HUMAN_BREAK_EVERY_N = 10

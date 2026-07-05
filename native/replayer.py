@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import datetime
 import logging
+import threading
 import time
 
 from . import automation, config, geometry, template_match
@@ -41,12 +42,29 @@ class Replayer:
         self._abort = False
         self._scale: tuple[float, float] | None = None
         self._templates = [load_template(p.template_path) for p in flow.points]
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # not paused by default
+        self.on_pause_requested = None  # callback(message: str), set by the GUI
 
     def request_stop(self) -> None:
         self._abort = True
+        self._pause_event.set()  # unblock a paused wait so it can see the abort and exit
+
+    def resume(self) -> None:
+        self._pause_event.set()
 
     def _should_abort(self) -> bool:
         return self._abort
+
+    def _pause_for_user(self, message: str) -> None:
+        """Blocks the replay thread until the GUI calls resume() (or Stop
+        is requested, which also unblocks it). Used when something can't be
+        automatically verified after retrying and needs a human to look."""
+        log.warning("Paused for user: %s", message)
+        self._pause_event.clear()
+        if self.on_pause_requested:
+            self.on_pause_requested(message)
+        self._pause_event.wait()
 
     def _click_step(self, index: int, max_wait: float = config.STEP_MAX_WAIT_S) -> tuple[float, float] | None:
         point = self.flow.points[index]
@@ -166,11 +184,22 @@ class Replayer:
             raise AbortRun()
 
         # 4. Message input: wait for the thread to load, click, paste
-        # (unless dry run, which leaves it empty on purpose).
+        # (unless dry run, which leaves it empty on purpose). The paste is
+        # verified by reading the field back (Ctrl+A/Ctrl+C, no DOM access
+        # available) and retried on mismatch; if it still doesn't match
+        # after a few attempts, pause and wait for a human rather than
+        # risk sending the wrong content (this is how a stale clipboard
+        # paste bug was caught previously).
         if self._click_step(STEP_MESSAGE_INPUT) is None:
             return fail("Message input never loaded")
         if not self.dry_run:
-            automation.paste_text(message)
+            if not automation.paste_text_and_verify(message):
+                self._pause_for_user(
+                    f"Could not verify the message pasted correctly for '{username}' after 3 attempts. "
+                    "Check the message box, fix it manually if needed, then click Resume (or Stop to abort)."
+                )
+                if self._abort:
+                    raise AbortRun()
         automation.inter_step_delay()
 
         if self._abort:
@@ -221,6 +250,12 @@ class Replayer:
                     on_progress(result)
 
                 if i < len(usernames) - 1 and not self._abort:
-                    automation.between_username_delay()
+                    if result.status == config.STATUS_SENT:
+                        # Already confirmed sent - no need for the long
+                        # randomized inter-user pacing, just a brief beat
+                        # before starting the next one.
+                        time.sleep(config.SUCCESS_NEXT_USER_DELAY_S)
+                    else:
+                        automation.between_username_delay()
 
         return results

@@ -69,6 +69,8 @@ class App(tk.Tk):
         self.btn_start.pack(side="left", padx=4)
         self.btn_stop = tk.Button(btn_row, text="Stop", command=self._stop_replay, bg="#b71c1c", fg="white")
         self.btn_stop.pack(side="left", padx=4)
+        self.btn_resume = tk.Button(btn_row, text="Resume", command=self._resume_replay, bg="#f9a825", fg="white", state="disabled")
+        self.btn_resume.pack(side="left", padx=4)
         self.dry_run_var = tk.BooleanVar(value=False)
         self.chk_dry_run = tk.Checkbutton(
             btn_row,
@@ -205,9 +207,26 @@ class App(tk.Tk):
             return
 
         self.replayer = Replayer(flow, dry_run=dry_run)
+        self.replayer.on_pause_requested = self._on_replay_paused
         count = 1 if dry_run else len(usernames)
         self._log(f"Starting {'DRY RUN ' if dry_run else ''}replay for {count} username(s).")
         self._run_bg(self._do_replay, usernames, message)
+
+    def _on_replay_paused(self, message: str) -> None:
+        # Called from the replay background thread - marshal to the Tk
+        # thread before touching any widget.
+        def show():
+            self.btn_resume.config(state="normal")
+            self._log(f"PAUSED: {message}")
+            messagebox.showwarning("Paused - needs attention", message)
+
+        self.after(0, show)
+
+    def _resume_replay(self) -> None:
+        if self.replayer:
+            self.replayer.resume()
+            self.btn_resume.config(state="disabled")
+            self._log("Resumed.")
 
     def _do_replay(self, usernames: list[str], message: str) -> None:
         def on_progress(result):
