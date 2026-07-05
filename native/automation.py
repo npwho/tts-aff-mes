@@ -226,7 +226,7 @@ def select_all() -> None:
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("a")
         _keyboard.release("a")
-    time.sleep(0.06)
+    time.sleep(0.1)
 
 
 def select_all_and_delete() -> None:
@@ -238,7 +238,7 @@ def select_all_and_delete() -> None:
     select_all()
     _keyboard.press(Key.backspace)
     _keyboard.release(Key.backspace)
-    time.sleep(0.06)
+    time.sleep(0.1)
 
 
 _READBACK_SENTINEL = "\x00__tts_aff_mes_readback_sentinel__\x00"
@@ -261,11 +261,11 @@ def read_focused_field() -> str:
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("a")
         _keyboard.release("a")
-    time.sleep(0.08)
+    time.sleep(0.12)
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("c")
         _keyboard.release("c")
-    time.sleep(0.15)
+    time.sleep(0.2)
     try:
         result = pyperclip.paste()
     except Exception:

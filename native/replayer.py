@@ -163,17 +163,17 @@ class Replayer:
         for _ in range(3):
             if automation.is_browser_foreground(self.flow.browser_hwnd):
                 return True
-            time.sleep(0.1)
+            time.sleep(0.2)
         return automation.activate_browser_window(self.flow.browser_hwnd)
 
     def _reset_state(self) -> None:
         # No DOM to confirm a dialog/chat panel actually closed - best
         # effort only. Several Escape presses with pauses between, since a
         # chat thread panel may take more than one to fully dismiss - local
-        # UI animation, not an API wait, so kept short.
+        # UI animation, not an API wait.
         for _ in range(3):
             automation.press_escape()
-            time.sleep(0.1)
+            time.sleep(0.2)
 
     def run_one(self, username: str, message: str) -> RunResult:
         start = datetime.datetime.now().isoformat(timespec="seconds")

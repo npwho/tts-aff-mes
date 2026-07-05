@@ -35,34 +35,38 @@ API_SETTLE_DELAY_S = 1.0
 # kept generous to avoid false not-found/stuck results on a slow response.
 STEP_MAX_WAIT_S = 10.0
 
-# ---- Local UI-update waits: blazing fast -----------------------------------
+# ---- Local UI-update waits: fast, but not instant --------------------------
+#
+# These aren't network waits, but this environment's own UI rendering
+# (dialog open animations, hover reveals, click registration) has proven to
+# be slower than a bare-minimum delay allows for - cutting them too far
+# caused real misses. Kept short relative to the API-wait bucket above, but
+# not razor-thin.
 
 # Pacing between usernames during replay - used for skipped/failed
 # usernames only (a successful send uses SUCCESS_NEXT_USER_DELAY_S
-# instead). Not a network wait, just spacing out actions.
-MIN_DELAY_BETWEEN_USERNAMES_S = 0.3
-MAX_DELAY_BETWEEN_USERNAMES_S = 0.8
+# instead).
+MIN_DELAY_BETWEEN_USERNAMES_S = 0.6
+MAX_DELAY_BETWEEN_USERNAMES_S = 1.2
 
-# After a *successful* send, move on to the next username almost instantly.
-SUCCESS_NEXT_USER_DELAY_S = 0.3
+# After a *successful* send, move on to the next username.
+SUCCESS_NEXT_USER_DELAY_S = 0.6
 
 # Every N usernames, insert one short breathing-room pause.
 HUMAN_BREAK_EVERY_N = 20
 HUMAN_BREAK_MIN_S = 2
 HUMAN_BREAK_MAX_S = 4
 
-# Mouse movement / click hygiene. Kept non-instant only so a click is a
-# real, visible mouse movement rather than a teleport, not for stealth
-# pacing.
-MOUSE_MOVE_MIN_DURATION_S = 0.03
-MOUSE_MOVE_MAX_DURATION_S = 0.08
+# Mouse movement / click hygiene.
+MOUSE_MOVE_MIN_DURATION_S = 0.15
+MOUSE_MOVE_MAX_DURATION_S = 0.3
 CLICK_JITTER_PX = 3
-PRE_CLICK_PAUSE_MIN_S = 0.01
-PRE_CLICK_PAUSE_MAX_S = 0.03
+PRE_CLICK_PAUSE_MIN_S = 0.05
+PRE_CLICK_PAUSE_MAX_S = 0.12
 
 # Pause between steps within a single username's flow.
-INTER_STEP_DELAY_MIN_S = 0.05
-INTER_STEP_DELAY_MAX_S = 0.1
+INTER_STEP_DELAY_MIN_S = 0.3
+INTER_STEP_DELAY_MAX_S = 0.5
 
 RESET_VERIFY_RETRIES = 3
 
@@ -70,34 +74,29 @@ RESET_VERIFY_RETRIES = 3
 # Chat button, which only appears on :hover and doesn't reliably show up
 # from the cursor just teleporting directly onto it. Only wiggled if it
 # isn't already visible on the first check; HOVER_REVEAL_REPEATS caps how
-# many wiggle attempts before giving up. This is pure local CSS rendering,
-# not an API wait - kept short, not long.
+# many wiggle attempts before giving up.
 HOVER_REVEAL_OFFSET_PX = 200
 HOVER_REVEAL_REPEATS = 3
-# Brief pause after moving away - just needs to register the cursor left.
-HOVER_REVEAL_PAUSE_S = 0.05
+# Pause after moving away - just needs to register the cursor left.
+HOVER_REVEAL_PAUSE_S = 0.12
 # Settle after moving back onto the target - the hover CSS/JS reveal needs
-# real time to render before a screenshot will show it. Deliberately NOT
-# cut to zero: too short a settle here was a confirmed real bug (missed
-# reveals) - but this is a local rendering wait, not an API wait, so it
-# stays short rather than long.
-HOVER_REVEAL_SETTLE_S = 0.25
+# real time to render before a screenshot will show it. Too short a settle
+# here was a confirmed real bug (missed reveals).
+HOVER_REVEAL_SETTLE_S = 0.4
 
 # Template matching (native/template_match.py). A smaller patch is more
 # sensitive to just the button/icon itself rather than surrounding content
-# that can shift or change between recording and replay. Poll interval is
-# how often we re-check while waiting - kept short so a fast API response
-# is noticed immediately rather than waiting out a longer interval.
+# that can shift or change between recording and replay.
 TEMPLATE_PATCH_RADIUS_PX = 14
 TEMPLATE_SEARCH_MARGIN_PX = 150
 TEMPLATE_MATCH_THRESHOLD = 0.7
-TEMPLATE_POLL_INTERVAL_S = 0.15
+TEMPLATE_POLL_INTERVAL_S = 0.2
 
 # Steps that don't get image verification at all (New message button,
 # Username input) - assumed to always be present once the page/dialog has
 # had a moment to render, so this just waits briefly (local rendering, not
 # an API call) then clicks the recorded position directly.
-FIXED_STEP_WAIT_S = 0.2
+FIXED_STEP_WAIT_S = 0.7
 
 STATUS_SENT = "SENT"
 STATUS_SKIPPED_NOT_FOUND = "SKIPPED_NOT_FOUND"
