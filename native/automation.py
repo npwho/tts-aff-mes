@@ -225,20 +225,16 @@ def select_all() -> None:
     time.sleep(0.1)
 
 
-def clear_field_via_backspace(presses: int = 30, pause: float = 0.03) -> None:
-    """Repeatedly presses Ctrl+Backspace (delete the word before the
-    cursor) to clear whatever's in the currently focused field. More
-    surgical than Ctrl+A: Ctrl+A risks selecting the whole page rather than
-    just the field's content if focus isn't exactly where expected, which
-    is exactly the failure case this needs to be safe against. A generous
-    fixed number of presses reliably clears any realistic username length
-    without needing to check via Ctrl+A (which would reintroduce that same
-    risk as part of the check)."""
-    for _ in range(presses):
-        with _keyboard.pressed(Key.ctrl):
-            _keyboard.press(Key.backspace)
-            _keyboard.release(Key.backspace)
-        time.sleep(pause)
+def select_all_and_delete() -> None:
+    """Ctrl+A then Backspace on whatever's currently focused - clears it in
+    one shot. Safe to use right after a real click we just performed
+    ourselves on the target field (focus is certain), unlike a generic
+    "clear whatever's focused" call where Ctrl+A risks selecting the whole
+    page if focus isn't exactly where expected."""
+    select_all()
+    _keyboard.press(Key.backspace)
+    _keyboard.release(Key.backspace)
+    time.sleep(0.1)
 
 
 _READBACK_SENTINEL = "\x00__tts_aff_mes_readback_sentinel__\x00"

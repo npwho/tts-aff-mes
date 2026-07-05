@@ -49,6 +49,11 @@ class Replayer:
         self._pause_event = threading.Event()
         self._pause_event.set()  # not paused by default
         self.on_pause_requested = None  # callback(message: str), set by the GUI
+        # True once the New message dialog's search box is open and stays
+        # open (e.g. right after a not-found result - the search just came
+        # back empty, nothing closed). Lets the next username skip
+        # re-clicking New message and jump straight to searching again.
+        self._dialog_open = False
 
     def request_stop(self) -> None:
         self._abort = True
@@ -164,6 +169,7 @@ class Replayer:
         self._scale = geometry.measure_scale()
 
         def fail(notes: str) -> RunResult:
+            self._dialog_open = False
             self._reset_state()
             end = datetime.datetime.now().isoformat(timespec="seconds")
             return RunResult(username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start, timestamp_end=end, notes=notes)
@@ -171,25 +177,24 @@ class Replayer:
         if self._abort:
             raise AbortRun()
 
-        # 1. New message - no image verification, just wait a moment for
-        # the page to be ready and click the recorded position directly.
-        self._click_fixed(STEP_NEW_MESSAGE)
-        automation.inter_step_delay()
+        # 1. New message - skipped if the search dialog is already open
+        # from a previous username that wasn't found (nothing closed it,
+        # so there's nothing to reopen). No image verification, just wait
+        # a moment for the page to be ready and click the recorded
+        # position directly.
+        if not self._dialog_open:
+            self._click_fixed(STEP_NEW_MESSAGE)
+            automation.inter_step_delay()
+            self._dialog_open = True
 
         if self._abort:
             raise AbortRun()
 
-        # 2. Username input - same: wait for the dialog to render, click
-        # directly. Clear via Ctrl+Backspace first in case a previous
-        # username's search term is still sitting in the box (e.g. the
-        # dialog didn't fully reset between users) - otherwise the paste
-        # would insert the new username alongside the old one instead of
-        # replacing it, and the search would look up the wrong (or a
-        # nonexistent) combined term. Ctrl+Backspace rather than Ctrl+A:
-        # Ctrl+A risks selecting the whole page instead of just the field
-        # if focus isn't exactly where expected.
+        # 2. Username input - click, clear whatever's already there
+        # (Ctrl+A + Backspace - safe here since we just clicked the field
+        # ourselves, so focus is certain), paste the username.
         self._click_fixed(STEP_USERNAME_INPUT)
-        automation.clear_field_via_backspace()
+        automation.select_all_and_delete()
         automation.paste_text(username)
         automation.api_settle_delay()
 
@@ -200,9 +205,10 @@ class Replayer:
         # wiggling; if not visible, wiggle the mouse away and back up to a
         # few times (see _click_chat_button). If it still never appears,
         # the username doesn't exist (or the search never returned a
-        # result) - not a stuck-UI failure.
+        # result) - not a stuck-UI failure, and the search dialog is still
+        # open (empty results don't close anything) - leave it open and
+        # move straight to the next username's search.
         if not self._click_chat_button():
-            self._reset_state()
             end = datetime.datetime.now().isoformat(timespec="seconds")
             return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)
         automation.api_settle_delay()
@@ -243,12 +249,16 @@ class Replayer:
             return fail("Send button not found")
 
         end = datetime.datetime.now().isoformat(timespec="seconds")
+        # Sending moves the view to the chat thread, not the search dialog
+        # - the next username needs a fresh New message click.
+        self._dialog_open = False
         self._reset_state()
         status = config.STATUS_DRY_RUN_OK if self.dry_run else config.STATUS_SENT
         notes = "clicked Send with an empty message (intentional no-op)" if self.dry_run else ""
         return RunResult(username, status, timestamp_start=start, timestamp_end=end, notes=notes)
 
     def run(self, usernames: list[str], message: str, on_progress=None) -> list[RunResult]:
+        self._dialog_open = False
         # A dry run only ever exercises the first username - it's a
         # click-path sanity check, not a batch operation.
         if self.dry_run:

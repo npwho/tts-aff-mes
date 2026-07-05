@@ -234,9 +234,20 @@ class App(tk.Tk):
 
         results = self.replayer.run(usernames, message, on_progress=on_progress)
         ok_statuses = (config.STATUS_SENT, config.STATUS_DRY_RUN_OK)
-        ok = sum(1 for r in results if r.status in ok_statuses)
+        ok = [r for r in results if r.status in ok_statuses]
+        not_found = [r for r in results if r.status == config.STATUS_SKIPPED_NOT_FOUND]
+        other = [r for r in results if r not in ok and r not in not_found]
         label = "reached Send" if self.replayer.dry_run else "sent"
-        self.after(0, lambda: self._log(f"Run finished: {ok}/{len(results)} {label}. See native/logs/ for the full CSV."))
+
+        def summarize():
+            self._log(f"Run finished: {len(ok)}/{len(results)} {label}.")
+            if not_found:
+                self._log("Not found: " + ", ".join(r.username for r in not_found))
+            if other:
+                self._log("Errors: " + ", ".join(f"{r.username} ({r.status})" for r in other))
+            self._log("See native/logs/ for the full CSV.")
+
+        self.after(0, summarize)
 
     def _stop_replay(self) -> None:
         if self.replayer:
