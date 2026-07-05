@@ -163,19 +163,24 @@ def hover_reveal_once(
     y: float,
     offset: float = config.HOVER_REVEAL_OFFSET_PX,
     pause: float = config.HOVER_REVEAL_PAUSE_S,
+    settle: float = config.HOVER_REVEAL_SETTLE_S,
 ) -> None:
     """One away-and-back cycle. Some hover-revealed elements (e.g. a chat
     button that only appears on :hover) don't reliably show up just from
     the cursor teleporting directly onto them - moving away and back is a
     much closer match to a real hover gesture and more reliably fires
-    whatever mouseenter/mouseover handling reveals the element. Call this
-    repeatedly (checking in between) only when the element isn't already
-    visible - if it's already there, no wiggling is needed at all."""
+    whatever mouseenter/mouseover handling reveals the element. The pause
+    after returning to the target is deliberately longer than after moving
+    away: the hover CSS/JS reveal needs real time to actually render before
+    a screenshot will show it, not just enough time to register the cursor
+    left. Call this repeatedly (checking in between) only when the element
+    isn't already visible - if it's already there, no wiggling is needed at
+    all."""
     away_y = y - offset if y - offset > 0 else y + offset
     move_to(x, away_y, jitter=False)
     time.sleep(pause)
     move_to(x, y, jitter=True)
-    time.sleep(pause)
+    time.sleep(settle)
 
 
 def api_settle_delay() -> None:

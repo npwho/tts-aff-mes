@@ -70,6 +70,7 @@ class Replayer:
         expected_x, expected_y = geometry.mouse_to_shot(point.mouse_x, point.mouse_y, self._scale)
 
         automation.move_to(point.mouse_x, point.mouse_y)
+        time.sleep(config.HOVER_REVEAL_SETTLE_S)
         result = template_match.find_once(template, expected_x, expected_y)
 
         attempts = 0

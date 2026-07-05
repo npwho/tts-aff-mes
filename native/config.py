@@ -45,7 +45,11 @@ RESET_VERIFY_RETRIES = 3
 # many wiggle attempts before giving up.
 HOVER_REVEAL_OFFSET_PX = 200
 HOVER_REVEAL_REPEATS = 3
+# Brief pause after moving away - just needs to register the cursor left.
 HOVER_REVEAL_PAUSE_S = 0.15
+# Longer settle after moving back onto the target - the hover CSS/JS reveal
+# needs real time to render before a screenshot will show it.
+HOVER_REVEAL_SETTLE_S = 0.35
 
 # Template matching (native/template_match.py).
 TEMPLATE_PATCH_RADIUS_PX = 30
