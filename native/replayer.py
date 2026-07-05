@@ -17,12 +17,12 @@ button's template never appearing after hovering - there's no DOM-based
 existence check anymore. Sending isn't verified either; Send is clicked and
 the run moves on.
 
-Two independent test modes, both on Replayer:
-- dry_run: exercises only the first username in the list, clicks Send for
-  real with the message left empty (most chat UIs no-op on an empty send).
-- search_only: exercises every username in the list - New message, search,
-  click Chat (confirming the thread actually opens) - but never touches the
-  message input or Send.
+Dry-run testing has one behavior flag (search_only) and one scope
+decision (which usernames get passed to run()): search_only clicks New
+message, searches, and clicks Chat (confirming the thread actually opens),
+but never touches the message input or Send - the caller decides whether
+that's exercised for just the first username or the whole list by what it
+passes to run().
 """
 from __future__ import annotations
 
@@ -47,13 +47,12 @@ class AbortRun(Exception):
 
 
 class Replayer:
-    def __init__(self, flow: RecordedFlow, dry_run: bool = False, search_only: bool = False) -> None:
+    def __init__(self, flow: RecordedFlow, search_only: bool = False) -> None:
         self.flow = flow
-        self.dry_run = dry_run
         # Clicks New message, searches, and clicks Chat (confirming the
-        # thread actually opens) for every username - but never touches
-        # the message input or Send. Unlike dry_run, this runs the WHOLE
-        # list, not just the first username.
+        # thread actually opens) - but never touches the message input or
+        # Send. Whether that's for one username or the whole list is
+        # decided by what the caller passes to run(), not by this flag.
         self.search_only = search_only
         self._abort = False
         self._scale: tuple[float, float] | None = None
@@ -244,35 +243,33 @@ class Replayer:
         if self._abort:
             raise AbortRun()
 
-        # 4. Message input: wait for the thread to load, click, paste
-        # (unless dry run, which leaves it empty on purpose). The paste is
-        # verified by reading the field back (Ctrl+A/Ctrl+C, no DOM access
-        # available) and retried on mismatch - each retry re-clicks the
-        # input first rather than assuming focus was retained, since losing
-        # focus is a likely reason the paste didn't land in the first
-        # place. If it still doesn't match after a few attempts, pause and
-        # wait for a human rather than risk sending the wrong content (this
-        # is how a stale clipboard paste bug was caught previously).
+        # 4. Message input: wait for the thread to load, click, paste. The
+        # paste is verified by reading the field back (Ctrl+A/Ctrl+C, no
+        # DOM access available) and retried on mismatch - each retry
+        # re-clicks the input first rather than assuming focus was
+        # retained, since losing focus is a likely reason the paste didn't
+        # land in the first place. If it still doesn't match after a few
+        # attempts, pause and wait for a human rather than risk sending the
+        # wrong content (this is how a stale clipboard paste bug was caught
+        # previously).
         if not self._click_step(STEP_MESSAGE_INPUT):
             return fail("Message input never loaded")
-        if not self.dry_run:
-            message_point = self.flow.points[STEP_MESSAGE_INPUT]
-            if not automation.paste_text_and_verify(
-                message, lambda: automation.click(message_point.mouse_x, message_point.mouse_y)
-            ):
-                self._pause_for_user(
-                    f"Could not verify the message pasted correctly for '{username}' after 3 attempts. "
-                    "Check the message box, fix it manually if needed, then click Resume (or Stop to abort)."
-                )
-                if self._abort:
-                    raise AbortRun()
+        message_point = self.flow.points[STEP_MESSAGE_INPUT]
+        if not automation.paste_text_and_verify(
+            message, lambda: automation.click(message_point.mouse_x, message_point.mouse_y)
+        ):
+            self._pause_for_user(
+                f"Could not verify the message pasted correctly for '{username}' after 3 attempts. "
+                "Check the message box, fix it manually if needed, then click Resume (or Stop to abort)."
+            )
+            if self._abort:
+                raise AbortRun()
         automation.inter_step_delay()
 
         if self._abort:
             raise AbortRun()
 
-        # 5. Send - clicked for real even in a dry run (message left empty,
-        # so most chat UIs simply no-op). Not verified either way.
+        # 5. Send. Not verified either way; the run just moves on.
         if not self._click_step(STEP_SEND_BUTTON):
             return fail("Send button not found")
 
@@ -281,18 +278,10 @@ class Replayer:
         # - the next username needs a fresh New message click.
         self._dialog_open = False
         self._reset_state()
-        status = config.STATUS_DRY_RUN_OK if self.dry_run else config.STATUS_SENT
-        notes = "clicked Send with an empty message (intentional no-op)" if self.dry_run else ""
-        return RunResult(username, status, timestamp_start=start, timestamp_end=end, notes=notes)
+        return RunResult(username, config.STATUS_SENT, timestamp_start=start, timestamp_end=end)
 
     def run(self, usernames: list[str], message: str, on_progress=None) -> list[RunResult]:
         self._dialog_open = False
-        # A plain dry run only ever exercises the first username - it's a
-        # click-path sanity check, not a batch operation. search_only runs
-        # the whole list (that's the point of it), even if dry_run is also
-        # set.
-        if self.dry_run and not self.search_only:
-            usernames = usernames[:1]
 
         config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
         log_path = config.LOGS_DIR / f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"

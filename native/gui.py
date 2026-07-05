@@ -71,20 +71,20 @@ class App(tk.Tk):
         self.btn_stop.pack(side="left", padx=4)
         self.btn_resume = tk.Button(btn_row, text="Resume", command=self._resume_replay, bg="#f9a825", fg="white", state="disabled")
         self.btn_resume.pack(side="left", padx=4)
-        self.dry_run_var = tk.BooleanVar(value=False)
-        self.chk_dry_run = tk.Checkbutton(
+        self.dry_run_first_var = tk.BooleanVar(value=False)
+        self.chk_dry_run_first = tk.Checkbutton(
             btn_row,
-            text="Dry run (first username only, leaves message empty, still clicks Send)",
-            variable=self.dry_run_var,
+            text="Dry run - first username (search + click Chat only, no message/send)",
+            variable=self.dry_run_first_var,
         )
-        self.chk_dry_run.pack(side="left", padx=12)
-        self.search_only_var = tk.BooleanVar(value=False)
-        self.chk_search_only = tk.Checkbutton(
+        self.chk_dry_run_first.pack(side="left", padx=12)
+        self.dry_run_all_var = tk.BooleanVar(value=False)
+        self.chk_dry_run_all = tk.Checkbutton(
             btn_row,
-            text="Dry run all usernames (search + click Chat only, no message/send)",
-            variable=self.search_only_var,
+            text="Dry run - all usernames (search + click Chat only, no message/send)",
+            variable=self.dry_run_all_var,
         )
-        self.chk_search_only.pack(side="left", padx=12)
+        self.chk_dry_run_all.pack(side="left", padx=12)
 
         log_frame = tk.LabelFrame(self, text="Log")
         log_frame.pack(fill="both", expand=True, padx=8, pady=4)
@@ -206,19 +206,22 @@ class App(tk.Tk):
         if not flow:
             messagebox.showerror("No recording", "Record the flow first.")
             return
-        usernames = [u.strip() for u in self.usernames_text.get("1.0", "end").splitlines() if u.strip()]
+        all_usernames = [u.strip() for u in self.usernames_text.get("1.0", "end").splitlines() if u.strip()]
         message = self.message_text.get("1.0", "end").rstrip("\n")
-        dry_run = self.dry_run_var.get()
-        search_only = self.search_only_var.get()
-        if not usernames or (not message and not dry_run and not search_only):
+        dry_run_first = self.dry_run_first_var.get()
+        dry_run_all = self.dry_run_all_var.get()
+        search_only = dry_run_first or dry_run_all
+        # Scope: "first username" only applies when "all usernames" isn't
+        # also checked - the all-usernames box always wins if both are on.
+        usernames = all_usernames[:1] if (dry_run_first and not dry_run_all) else all_usernames
+        if not usernames or (not message and not search_only):
             messagebox.showerror("Missing input", "Provide at least one username and a message.")
             return
 
-        self.replayer = Replayer(flow, dry_run=dry_run, search_only=search_only)
+        self.replayer = Replayer(flow, search_only=search_only)
         self.replayer.on_pause_requested = self._on_replay_paused
-        count = len(usernames) if search_only else (1 if dry_run else len(usernames))
-        mode_label = "SEARCH-ONLY " if search_only else ("DRY RUN " if dry_run else "")
-        self._log(f"Starting {mode_label}replay for {count} username(s).")
+        mode_label = "DRY RUN " if search_only else ""
+        self._log(f"Starting {mode_label}replay for {len(usernames)} username(s).")
         self._run_bg(self._do_replay, usernames, message)
 
     def _on_replay_paused(self, message: str) -> None:
@@ -242,16 +245,11 @@ class App(tk.Tk):
             self.after(0, lambda: self._log(f"{result.username}: {result.status} ({result.notes})"))
 
         results = self.replayer.run(usernames, message, on_progress=on_progress)
-        ok_statuses = (config.STATUS_SENT, config.STATUS_DRY_RUN_OK, config.STATUS_FOUND)
+        ok_statuses = (config.STATUS_SENT, config.STATUS_FOUND)
         ok = [r for r in results if r.status in ok_statuses]
         not_found = [r for r in results if r.status == config.STATUS_SKIPPED_NOT_FOUND]
         other = [r for r in results if r not in ok and r not in not_found]
-        if self.replayer.search_only:
-            label = "found"
-        elif self.replayer.dry_run:
-            label = "reached Send"
-        else:
-            label = "sent"
+        label = "found" if self.replayer.search_only else "sent"
 
         def summarize():
             self._log(f"Run finished: {len(ok)}/{len(results)} {label}.")
