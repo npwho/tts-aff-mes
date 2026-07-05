@@ -44,25 +44,42 @@ class Replayer:
     def _should_abort(self) -> bool:
         return self._abort
 
-    def _click_step(self, index: int, max_wait: float = config.STEP_MAX_WAIT_S, hover_wiggle: bool = False) -> tuple[float, float] | None:
+    def _click_step(self, index: int, max_wait: float = config.STEP_MAX_WAIT_S) -> tuple[float, float] | None:
         point = self.flow.points[index]
         template = self._templates[index]
         expected_x, expected_y = geometry.mouse_to_shot(point.mouse_x, point.mouse_y, self._scale)
-
-        if hover_wiggle:
-            # A single teleport-to-target doesn't reliably fire the
-            # mouseenter/mouseover that reveals a hover-only element (the
-            # Chat button) - move away and back repeatedly before every
-            # check, much closer to a real hover gesture.
-            before_each_poll = lambda: automation.hover_reveal(point.mouse_x, point.mouse_y)
-        else:
-            automation.move_to(point.mouse_x, point.mouse_y)
-            before_each_poll = None
-
+        automation.move_to(point.mouse_x, point.mouse_y)
         result = template_match.wait_for_match(
-            template, expected_x, expected_y, max_wait_s=max_wait,
-            should_abort=self._should_abort, before_each_poll=before_each_poll,
+            template, expected_x, expected_y, max_wait_s=max_wait, should_abort=self._should_abort,
         )
+        if result is None:
+            return None
+        mx, my = geometry.shot_to_mouse(result[0], result[1], self._scale)
+        automation.click(mx, my)
+        return (mx, my)
+
+    def _click_chat_button(self) -> tuple[float, float] | None:
+        """Only appears on :hover. Checks once at the recorded position
+        with no wiggling - if it's already visible, click it immediately.
+        Only if it's NOT visible does it wiggle the mouse away and back
+        (a single teleport onto the spot doesn't reliably fire the
+        mouseenter/mouseover that reveals it), up to a fixed number of
+        attempts - not a time-based wait."""
+        point = self.flow.points[STEP_CHAT_BUTTON]
+        template = self._templates[STEP_CHAT_BUTTON]
+        expected_x, expected_y = geometry.mouse_to_shot(point.mouse_x, point.mouse_y, self._scale)
+
+        automation.move_to(point.mouse_x, point.mouse_y)
+        result = template_match.find_once(template, expected_x, expected_y)
+
+        attempts = 0
+        while result is None and attempts < config.HOVER_REVEAL_REPEATS:
+            if self._should_abort():
+                return None
+            automation.hover_reveal_once(point.mouse_x, point.mouse_y)
+            result = template_match.find_once(template, expected_x, expected_y)
+            attempts += 1
+
         if result is None:
             return None
         mx, my = geometry.shot_to_mouse(result[0], result[1], self._scale)
@@ -116,12 +133,12 @@ class Replayer:
         if self._abort:
             raise AbortRun()
 
-        # 3. Chat button: only appears on :hover, and a single teleport of
-        # the cursor onto it doesn't reliably trigger that - wiggle the
-        # mouse away and back repeatedly while polling. If it never
-        # appears, the username doesn't exist (or the search never
-        # returned a result) - not a stuck-UI failure.
-        if self._click_step(STEP_CHAT_BUTTON, hover_wiggle=True) is None:
+        # 3. Chat button: checked once at its recorded position with no
+        # wiggling; if not visible, wiggle the mouse away and back up to a
+        # few times (see _click_chat_button). If it still never appears,
+        # the username doesn't exist (or the search never returned a
+        # result) - not a stuck-UI failure.
+        if self._click_chat_button() is None:
             self._reset_state()
             end = datetime.datetime.now().isoformat(timespec="seconds")
             return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)

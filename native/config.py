@@ -38,9 +38,11 @@ API_SETTLE_DELAY_S = 0.8
 
 RESET_VERIFY_RETRIES = 3
 
-# Hover-reveal wiggle (automation.hover_reveal) - used for the Chat button,
-# which only appears on :hover and doesn't reliably show up from the
-# cursor just teleporting directly onto it.
+# Hover-reveal wiggle (automation.hover_reveal_once) - used only for the
+# Chat button, which only appears on :hover and doesn't reliably show up
+# from the cursor just teleporting directly onto it. Only wiggled if it
+# isn't already visible on the first check; HOVER_REVEAL_REPEATS caps how
+# many wiggle attempts before giving up.
 HOVER_REVEAL_OFFSET_PX = 200
 HOVER_REVEAL_REPEATS = 3
 HOVER_REVEAL_PAUSE_S = 0.15

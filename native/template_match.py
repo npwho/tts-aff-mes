@@ -46,6 +46,18 @@ def load_template(path) -> np.ndarray:
     return np.array(Image.open(path))
 
 
+def find_once(
+    template: np.ndarray,
+    expected_x: float,
+    expected_y: float,
+    margin: int = config.TEMPLATE_SEARCH_MARGIN_PX,
+    threshold: float = config.TEMPLATE_MATCH_THRESHOLD,
+):
+    """Single-shot check against a fresh screenshot right now - no polling,
+    no waiting. Returns (x, y, confidence) in screenshot space, or None."""
+    return _find_in_region(template, expected_x, expected_y, margin, threshold)
+
+
 def _find_in_region(template: np.ndarray, expected_x: float, expected_y: float, margin: int, threshold: float):
     screenshot = pyautogui.screenshot()
     arr = np.array(screenshot)
@@ -79,20 +91,15 @@ def wait_for_match(
     margin: int = config.TEMPLATE_SEARCH_MARGIN_PX,
     threshold: float = config.TEMPLATE_MATCH_THRESHOLD,
     should_abort=None,
-    before_each_poll=None,
 ):
     """Polls a fresh screenshot until the template is found near the
     expected point, or gives up after max_wait_s. Returns (x, y,
     confidence) in screenshot space, or None. `should_abort`, if given, is
-    checked each poll so a Stop request can interrupt a long wait.
-    `before_each_poll`, if given, is called before every screenshot (e.g.
-    to re-do a hover gesture for an element that only reveals on :hover)."""
+    checked each poll so a Stop request can interrupt a long wait."""
     deadline = time.monotonic() + max_wait_s
     while True:
         if should_abort and should_abort():
             return None
-        if before_each_poll:
-            before_each_poll()
         found = _find_in_region(template, expected_x, expected_y, margin, threshold)
         if found:
             log.info("template matched at (%.0f, %.0f) confidence=%.3f", found[0], found[1], found[2])
