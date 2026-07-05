@@ -10,6 +10,7 @@ on the Tk thread.
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import tkinter as tk
@@ -34,6 +35,8 @@ class App(tk.Tk):
 
         self._build_widgets()
         self._refresh_recording_status()
+        self._load_last_input()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---- widget layout -----------------------------------------------------
 
@@ -93,6 +96,31 @@ class App(tk.Tk):
     def _refresh_recording_status(self) -> None:
         flow = Recorder.load()
         self.recording_status_label.config(text="Recording saved." if flow else "No recording yet.")
+
+    def _load_last_input(self) -> None:
+        if not config.LAST_INPUT_PATH.exists():
+            return
+        try:
+            data = json.loads(config.LAST_INPUT_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        self.usernames_text.insert("1.0", data.get("usernames", ""))
+        self.message_text.insert("1.0", data.get("message", ""))
+
+    def _save_last_input(self) -> None:
+        data = {
+            "usernames": self.usernames_text.get("1.0", "end").rstrip("\n"),
+            "message": self.message_text.get("1.0", "end").rstrip("\n"),
+        }
+        try:
+            config.STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+            config.LAST_INPUT_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _on_close(self) -> None:
+        self._save_last_input()
+        self.destroy()
 
     # ---- recording -------------------------------------------------------------
 

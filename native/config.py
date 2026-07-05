@@ -8,6 +8,7 @@ LOGS_DIR = NATIVE_DIR / "logs"
 
 RECORDED_FLOW_PATH = STORAGE_DIR / "recorded_flow.json"
 PREVIEW_IMAGE_PATH = STORAGE_DIR / "recording_preview.png"
+LAST_INPUT_PATH = STORAGE_DIR / "last_input.json"
 
 # Pacing between usernames during replay (randomized within this range).
 MIN_DELAY_BETWEEN_USERNAMES_S = 8
