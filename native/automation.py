@@ -215,10 +215,23 @@ def paste_text(text: str) -> None:
     time.sleep(0.3)
 
 
+_READBACK_SENTINEL = "\x00__tts_aff_mes_readback_sentinel__\x00"
+
+
 def read_focused_field() -> str:
     """Ctrl+A then Ctrl+C on whatever's currently focused, returns the
     clipboard afterward - a DOM-free way to read back what a field actually
-    contains, used to verify a paste landed correctly."""
+    contains, used to verify a paste landed correctly.
+
+    The clipboard is poisoned with a sentinel value before Ctrl+C. If
+    nothing is actually selected (e.g. focus isn't really on the field,
+    which is exactly the failure case this is meant to catch), Ctrl+C is a
+    no-op and the clipboard is left holding the sentinel rather than real
+    field content - previously this was missed entirely, since the
+    clipboard would still hold the text `paste_text()` had just set,
+    making an unfocused/empty field falsely "verify" as correct."""
+    pyperclip.copy(_READBACK_SENTINEL)
+    time.sleep(0.05)
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("a")
         _keyboard.release("a")
@@ -228,28 +241,26 @@ def read_focused_field() -> str:
         _keyboard.release("c")
     time.sleep(0.2)
     try:
-        return pyperclip.paste()
+        result = pyperclip.paste()
     except Exception:
         return ""
+    return "" if result == _READBACK_SENTINEL else result
 
 
-def clear_focused_field() -> None:
-    """Ctrl+A then Backspace on whatever's currently focused."""
-    with _keyboard.pressed(Key.ctrl):
-        _keyboard.press("a")
-        _keyboard.release("a")
-    time.sleep(0.1)
-    _keyboard.press(Key.backspace)
-    _keyboard.release(Key.backspace)
-    time.sleep(0.1)
-
-
-def paste_text_and_verify(text: str, max_attempts: int = 3) -> bool:
-    """Pastes text, then reads the field back (read_focused_field) to
-    confirm it actually landed - there's no DOM to check this against
-    otherwise. Clears the field and retries on a mismatch, up to
-    max_attempts. Returns True once verified, False if it never matched."""
+def paste_text_and_verify(text: str, click_fn, max_attempts: int = 3) -> bool:
+    """Clicks the field (click_fn), selects any existing content, pastes
+    text, then reads the field back (read_focused_field) to confirm it
+    actually landed - there's no DOM to check this against otherwise. Every
+    attempt re-clicks first rather than assuming focus was retained from a
+    previous failed attempt, since losing focus is a likely reason the
+    paste didn't land in the first place. Returns True once verified,
+    False if it never matched after max_attempts."""
     for attempt in range(1, max_attempts + 1):
+        click_fn()
+        with _keyboard.pressed(Key.ctrl):
+            _keyboard.press("a")
+            _keyboard.release("a")
+        time.sleep(0.1)
         paste_text(text)
         actual = read_focused_field()
         if actual.strip() == text.strip():
@@ -257,8 +268,6 @@ def paste_text_and_verify(text: str, max_attempts: int = 3) -> bool:
             _keyboard.release(Key.end)
             return True
         log.warning("paste verification mismatch on attempt %d/%d", attempt, max_attempts)
-        if attempt < max_attempts:
-            clear_focused_field()
     return False
 
 

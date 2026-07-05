@@ -186,14 +186,18 @@ class Replayer:
         # 4. Message input: wait for the thread to load, click, paste
         # (unless dry run, which leaves it empty on purpose). The paste is
         # verified by reading the field back (Ctrl+A/Ctrl+C, no DOM access
-        # available) and retried on mismatch; if it still doesn't match
-        # after a few attempts, pause and wait for a human rather than
-        # risk sending the wrong content (this is how a stale clipboard
-        # paste bug was caught previously).
-        if self._click_step(STEP_MESSAGE_INPUT) is None:
+        # available) and retried on mismatch - each retry re-clicks the
+        # input first rather than assuming focus was retained, since losing
+        # focus is a likely reason the paste didn't land in the first
+        # place. If it still doesn't match after a few attempts, pause and
+        # wait for a human rather than risk sending the wrong content (this
+        # is how a stale clipboard paste bug was caught previously).
+        message_point = self._click_step(STEP_MESSAGE_INPUT)
+        if message_point is None:
             return fail("Message input never loaded")
         if not self.dry_run:
-            if not automation.paste_text_and_verify(message):
+            mx, my = message_point
+            if not automation.paste_text_and_verify(message, lambda: automation.click(mx, my)):
                 self._pause_for_user(
                     f"Could not verify the message pasted correctly for '{username}' after 3 attempts. "
                     "Check the message box, fix it manually if needed, then click Resume (or Stop to abort)."
