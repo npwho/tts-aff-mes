@@ -180,13 +180,16 @@ class Replayer:
             raise AbortRun()
 
         # 2. Username input - same: wait for the dialog to render, click
-        # directly. Select-all first in case a previous username's search
-        # term is still sitting in the box (e.g. the dialog didn't fully
-        # reset between users) - otherwise the paste would insert the new
-        # username alongside the old one instead of replacing it, and the
-        # search would look up the wrong (or a nonexistent) term entirely.
+        # directly. Clear via Ctrl+Backspace first in case a previous
+        # username's search term is still sitting in the box (e.g. the
+        # dialog didn't fully reset between users) - otherwise the paste
+        # would insert the new username alongside the old one instead of
+        # replacing it, and the search would look up the wrong (or a
+        # nonexistent) combined term. Ctrl+Backspace rather than Ctrl+A:
+        # Ctrl+A risks selecting the whole page instead of just the field
+        # if focus isn't exactly where expected.
         self._click_fixed(STEP_USERNAME_INPUT)
-        automation.select_all()
+        automation.clear_field_via_backspace()
         automation.paste_text(username)
         automation.api_settle_delay()
 
