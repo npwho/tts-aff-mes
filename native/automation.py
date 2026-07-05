@@ -196,25 +196,23 @@ def paste_text(text: str) -> None:
 
     Deliberately never types character-by-character: that would risk a stray
     Enter mid-multiline-message and looks more scripted than a real paste.
-    """
-    prior_clipboard = None
-    try:
-        prior_clipboard = pyperclip.paste()
-    except Exception:
-        pass
 
+    Deliberately does NOT restore whatever was previously on the clipboard
+    afterward. That was tried and is dangerous: if the target app takes even
+    slightly longer than our fixed post-paste delay to actually read the
+    clipboard (very plausible over Remote Desktop's extra input latency),
+    the clipboard gets overwritten back to the old content before the paste
+    completes - so the app ends up pasting that stale old content instead
+    of what was intended. Confirmed in practice: a stale clipboard value
+    (an old username list) got pasted into the message box this way. Not
+    worth the convenience.
+    """
     pyperclip.copy(text)
-    time.sleep(0.05)
+    time.sleep(0.1)
     with _keyboard.pressed(Key.ctrl):
         _keyboard.press("v")
         _keyboard.release("v")
-    time.sleep(0.15)
-
-    if prior_clipboard is not None:
-        try:
-            pyperclip.copy(prior_clipboard)
-        except Exception:
-            pass
+    time.sleep(0.3)
 
 
 def press_enter() -> None:
