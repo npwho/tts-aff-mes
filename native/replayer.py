@@ -180,8 +180,13 @@ class Replayer:
             raise AbortRun()
 
         # 2. Username input - same: wait for the dialog to render, click
-        # directly, paste, let the search API call fire.
+        # directly. Select-all first in case a previous username's search
+        # term is still sitting in the box (e.g. the dialog didn't fully
+        # reset between users) - otherwise the paste would insert the new
+        # username alongside the old one instead of replacing it, and the
+        # search would look up the wrong (or a nonexistent) term entirely.
         self._click_fixed(STEP_USERNAME_INPUT)
+        automation.select_all()
         automation.paste_text(username)
         automation.api_settle_delay()
 

@@ -215,6 +215,16 @@ def paste_text(text: str) -> None:
     time.sleep(0.3)
 
 
+def select_all() -> None:
+    """Ctrl+A on whatever's currently focused - used to select (and so
+    replace on the next paste) any leftover text already in a field,
+    rather than pasting new text in *alongside* it."""
+    with _keyboard.pressed(Key.ctrl):
+        _keyboard.press("a")
+        _keyboard.release("a")
+    time.sleep(0.1)
+
+
 _READBACK_SENTINEL = "\x00__tts_aff_mes_readback_sentinel__\x00"
 
 
@@ -247,6 +257,19 @@ def read_focused_field() -> str:
     return "" if result == _READBACK_SENTINEL else result
 
 
+def _normalize_for_compare(s: str) -> str:
+    """Collapses all whitespace (including every kind of line break) so
+    comparison is about actual content, not formatting. A multi-line
+    message pasted into a contenteditable box very often comes back with a
+    different line-break structure than what went in - e.g. a blank-line
+    paragraph break gets represented as a separate <div>, and copying it
+    back out can produce a different number of newlines than the original
+    text had. That's a rendering/serialization difference, not a sign the
+    wrong content was pasted, so exact string equality is the wrong check
+    here."""
+    return "".join(s.split())
+
+
 def paste_text_and_verify(text: str, click_fn, max_attempts: int = 3) -> bool:
     """Clicks the field (click_fn), selects any existing content, pastes
     text, then reads the field back (read_focused_field) to confirm it
@@ -257,13 +280,10 @@ def paste_text_and_verify(text: str, click_fn, max_attempts: int = 3) -> bool:
     False if it never matched after max_attempts."""
     for attempt in range(1, max_attempts + 1):
         click_fn()
-        with _keyboard.pressed(Key.ctrl):
-            _keyboard.press("a")
-            _keyboard.release("a")
-        time.sleep(0.1)
+        select_all()
         paste_text(text)
         actual = read_focused_field()
-        if actual.strip() == text.strip():
+        if _normalize_for_compare(actual) == _normalize_for_compare(text):
             _keyboard.press(Key.end)
             _keyboard.release(Key.end)
             return True
