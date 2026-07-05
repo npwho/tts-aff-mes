@@ -5,8 +5,7 @@ from dataclasses import dataclass
 
 # Fixed, ordered list of the 5 points a recording captures. Guided recording
 # asks for exactly these, one click each, in this order - no inference from
-# a raw click/focus/paste event stream, no selector matching, nothing to
-# misclassify.
+# a raw event stream, no selector, no browser DOM involvement at all.
 STEP_LABELS = [
     "New message button",
     "Username input",
@@ -17,40 +16,44 @@ STEP_LABELS = [
 
 
 @dataclass
+class RecordedPoint:
+    """A single recorded click: the real mouse-space coordinate it landed
+    at, and the path to a small screenshot patch captured around it at
+    record time. Replay waits for that same patch to visually reappear
+    before clicking, confirming the element actually rendered there rather
+    than blindly trusting a stale coordinate."""
+
+    mouse_x: float
+    mouse_y: float
+    template_path: str
+
+    def to_dict(self) -> dict:
+        return {"mouseX": self.mouse_x, "mouseY": self.mouse_y, "templatePath": self.template_path}
+
+    @staticmethod
+    def from_dict(d: dict) -> "RecordedPoint":
+        return RecordedPoint(mouse_x=d["mouseX"], mouse_y=d["mouseY"], template_path=d["templatePath"])
+
+
+@dataclass
 class RecordedFlow:
-    """The 5 fixed viewport rects captured during Record. Each is clicked
-    directly during replay, converted to a real screen coordinate via
-    geometry.PixelTransform - no selector, no DOM matching."""
+    """The 5 recorded points, in STEP_LABELS order, plus the browser window
+    handle captured at record time (for foreground checks/activation)."""
 
-    new_message: dict
-    username_input: dict
-    chat_button: dict
-    message_input: dict
-    send_button: dict
-
-    def as_list(self) -> list[tuple[str, dict]]:
-        return list(zip(STEP_LABELS, [
-            self.new_message, self.username_input, self.chat_button,
-            self.message_input, self.send_button,
-        ]))
+    points: list[RecordedPoint]
+    browser_hwnd: int | None = None
 
     def to_dict(self) -> dict:
         return {
-            "newMessage": self.new_message,
-            "usernameInput": self.username_input,
-            "chatButton": self.chat_button,
-            "messageInput": self.message_input,
-            "sendButton": self.send_button,
+            "points": [p.to_dict() for p in self.points],
+            "browserHwnd": self.browser_hwnd,
         }
 
     @staticmethod
     def from_dict(d: dict) -> "RecordedFlow":
         return RecordedFlow(
-            new_message=d["newMessage"],
-            username_input=d["usernameInput"],
-            chat_button=d["chatButton"],
-            message_input=d["messageInput"],
-            send_button=d["sendButton"],
+            points=[RecordedPoint.from_dict(p) for p in d["points"]],
+            browser_hwnd=d.get("browserHwnd"),
         )
 
 

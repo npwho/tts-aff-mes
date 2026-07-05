@@ -1,32 +1,29 @@
-"""Replay against a fixed 5-point RecordedFlow (docs/protocol.md: replay
-phase). No selector matching, no per-step kind inference - just: click New
-message, click username input + paste + check existence, hover+click Chat,
-click message input (+ paste unless dry run), click Send.
+"""Replay against a recorded 5-point flow - fully native, no browser
+extension, no DOM queries, no WebSocket. Each click waits for its recorded
+template patch to visually reappear on screen before acting (confirming the
+element actually loaded, not just clicking a stale coordinate), refining
+the click point to wherever the match actually is.
 
-Coordinates come from a screenshot-based pixel calibration (geometry.py)
-done fresh before every username - no trusting of self-reported browser
-window geometry, which was found to be unreliable on at least one real
-deployment (Windows Server 2022 / Remote Desktop).
+"Not found" (username doesn't exist) is inferred purely from the Chat
+button's template never appearing after hovering - there's no DOM-based
+existence check anymore. Sending isn't verified either; Send is clicked and
+the run moves on.
 """
 from __future__ import annotations
 
-import asyncio
 import csv
 import datetime
 import logging
+import time
 
-from . import automation, config, geometry
+from . import automation, config, geometry, template_match
 from .models import CSV_HEADER, RecordedFlow, RunResult
-from .ws_server import NativeBridge
+from .template_match import load_template
 
 log = logging.getLogger("replayer")
 
-CALIBRATION_MARKERS = [
-    {"x": geometry.MARKER_VIEWPORT_ORIGIN[0], "y": geometry.MARKER_VIEWPORT_ORIGIN[1],
-     "size": geometry.MARKER_SIZE_PX, "rgb": list(geometry.MARKER_COLOR_ORIGIN)},
-    {"x": geometry.MARKER_VIEWPORT_FAR[0], "y": geometry.MARKER_VIEWPORT_FAR[1],
-     "size": geometry.MARKER_SIZE_PX, "rgb": list(geometry.MARKER_COLOR_FAR)},
-]
+# Indices into RecordedFlow.points, matching models.STEP_LABELS order.
+STEP_NEW_MESSAGE, STEP_USERNAME_INPUT, STEP_CHAT_BUTTON, STEP_MESSAGE_INPUT, STEP_SEND_BUTTON = range(5)
 
 
 class AbortRun(Exception):
@@ -34,171 +31,118 @@ class AbortRun(Exception):
 
 
 class Replayer:
-    def __init__(
-        self,
-        bridge: NativeBridge,
-        flow: RecordedFlow,
-        browser_hwnd: int | None = None,
-        dry_run: bool = False,
-    ) -> None:
-        self.bridge = bridge
+    def __init__(self, flow: RecordedFlow, dry_run: bool = False) -> None:
         self.flow = flow
-        self.browser_hwnd = browser_hwnd
         self.dry_run = dry_run
         self._abort = False
-        self._transform: geometry.PixelTransform | None = None
-
-        bridge.on("captcha_detected", self._on_captcha)
-        bridge.on("heartbeat_lost", self._on_heartbeat_lost)
-        bridge.on("disconnected", self._on_heartbeat_lost)
+        self._scale: tuple[float, float] | None = None
+        self._templates = [load_template(p.template_path) for p in flow.points]
 
     def request_stop(self) -> None:
         self._abort = True
 
-    def _on_captcha(self, _msg: dict) -> None:
-        log.warning("Captcha detected on page - pausing run")
-        self._abort = True
+    def _should_abort(self) -> bool:
+        return self._abort
 
-    def _on_heartbeat_lost(self, _msg: dict) -> None:
-        log.warning("Extension connection lost - pausing run")
-        self._abort = True
-
-    async def _calibrate(self) -> bool:
-        """Places marker elements on the page and finds them via a real
-        screenshot - pure pixel ground truth, done fresh before every
-        username so a moved window can never poison a click."""
-        placed = await self.bridge.request(
-            "place_calibration_markers", {"markers": CALIBRATION_MARKERS}, timeout=config.REQUEST_TIMEOUT_S
+    def _click_step(self, index: int, max_wait: float = config.STEP_MAX_WAIT_S) -> tuple[float, float] | None:
+        point = self.flow.points[index]
+        template = self._templates[index]
+        expected_x, expected_y = geometry.mouse_to_shot(point.mouse_x, point.mouse_y, self._scale)
+        # Move to the recorded guess immediately - this is itself the
+        # "hover" that, for the Chat button, triggers the row's reveal.
+        automation.move_to(point.mouse_x, point.mouse_y)
+        result = template_match.wait_for_match(
+            template, expected_x, expected_y, max_wait_s=max_wait, should_abort=self._should_abort,
         )
-        log.info("marker verification (as actually rendered by the page): %s", placed.get("verification"))
-        try:
-            self._transform = await asyncio.to_thread(geometry.calibrate_via_screenshot)
-        finally:
-            await self.bridge.send_fire_and_forget("remove_calibration_markers")
-        return self._transform is not None
+        if result is None:
+            return None
+        mx, my = geometry.shot_to_mouse(result[0], result[1], self._scale)
+        automation.click(mx, my)
+        return (mx, my)
 
-    def _mouse_point(self, rect: dict) -> tuple[float, float]:
-        sx, sy = self._transform.rect_to_mouse(rect)
-        log.info("rect=%s -> mouse=(%.0f, %.0f)", rect, sx, sy)
-        return sx, sy
-
-    def _click_rect(self, rect: dict, jitter: bool = True) -> None:
-        sx, sy = self._mouse_point(rect)
-        automation.click(sx, sy, jitter=jitter)
-
-    async def _check_foreground(self) -> bool:
-        if automation.is_browser_foreground(self.browser_hwnd):
+    def _check_foreground(self) -> bool:
+        if automation.is_browser_foreground(self.flow.browser_hwnd):
             return True
-        # Not foreground yet - most commonly because the user just clicked
-        # Start in this tool's own window. Bring the browser forward with a
-        # real click on its title bar (same as a human alt-tabbing back)
-        # rather than failing immediately. Also required before calibrating,
-        # since the screenshot needs the browser actually visible on screen.
-        return automation.activate_browser_window(self.browser_hwnd)
+        return automation.activate_browser_window(self.flow.browser_hwnd)
 
-    async def _reset_state(self) -> bool:
+    def _reset_state(self) -> None:
+        # No DOM to confirm a dialog actually closed - best effort only.
         automation.press_escape()
-        for _ in range(config.RESET_VERIFY_RETRIES):
-            resp = await self.bridge.request("reset_state", {}, timeout=config.REQUEST_TIMEOUT_S)
-            if not resp.get("dialogOpen"):
-                return True
-            automation.press_escape()
-        return False
+        time.sleep(0.3)
+        automation.press_escape()
 
-    async def _text_at_rect(self, rect: dict) -> str:
-        cx = rect["x"] + rect["w"] / 2
-        cy = rect["y"] + rect["h"] / 2
-        resp = await self.bridge.request(
-            "get_text_at_point", {"viewportX": cx, "viewportY": cy}, timeout=config.REQUEST_TIMEOUT_S
-        )
-        return resp.get("text", "")
-
-    async def run_one(self, username: str, message: str) -> RunResult:
+    def run_one(self, username: str, message: str) -> RunResult:
         start = datetime.datetime.now().isoformat(timespec="seconds")
-        flow = self.flow
 
-        if not await self._check_foreground():
+        if not self._check_foreground():
             return RunResult(
                 username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
                 timestamp_end=start, notes="browser window not in foreground",
             )
 
-        if not await self._calibrate():
+        self._scale = geometry.measure_scale()
+
+        def fail(notes: str) -> RunResult:
+            self._reset_state()
             end = datetime.datetime.now().isoformat(timespec="seconds")
-            return RunResult(
-                username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start, timestamp_end=end,
-                notes="calibration markers not found in screenshot - is the browser window fully visible?",
-            )
+            return RunResult(username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start, timestamp_end=end, notes=notes)
 
         if self._abort:
             raise AbortRun()
 
         # 1. New message
-        self._click_rect(flow.new_message)
-
-        # 2. Username input: click, paste, check existence
-        self._click_rect(flow.username_input)
-        automation.paste_text(username)
-        search = await self.bridge.request(
-            "check_username_exists", {"username": username}, timeout=config.SEARCH_RESULT_TIMEOUT_S,
-        )
-        status = search.get("status")
-        end = datetime.datetime.now().isoformat(timespec="seconds")
-        if status == "not_found":
-            await self._reset_state()
-            return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)
-        if status == "ambiguous":
-            await self._reset_state()
-            return RunResult(
-                username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start,
-                timestamp_end=end, notes=f"ambiguous match, count={search.get('count')}",
-            )
+        if self._click_step(STEP_NEW_MESSAGE) is None:
+            return fail("New message button not found")
+        automation.inter_step_delay()
 
         if self._abort:
             raise AbortRun()
 
-        # 3. Chat button: moving the cursor to its own recorded point is
-        # itself what triggers the containing row's hover reveal.
-        sx, sy = self._mouse_point(flow.chat_button)
-        automation.move_to(sx, sy)
-        automation.hover_settle()
-        automation.click(sx, sy, jitter=True)
+        # 2. Username input: click, paste, let the search API call fire
+        if self._click_step(STEP_USERNAME_INPUT) is None:
+            return fail("Username input not found")
+        automation.paste_text(username)
+        automation.api_settle_delay()
 
-        # 4. Message input: click, and paste the real message unless this is
-        # a dry run (left empty on purpose so Send can be safely clicked for
-        # real without actually sending anything - most chat UIs no-op on
-        # an empty send).
-        self._click_rect(flow.message_input)
+        if self._abort:
+            raise AbortRun()
+
+        # 3. Chat button: hovering at its recorded point is itself what
+        # triggers the row's hover reveal. If it never appears, the
+        # username doesn't exist (or the search never returned a result) -
+        # not a stuck-UI failure.
+        if self._click_step(STEP_CHAT_BUTTON) is None:
+            self._reset_state()
+            end = datetime.datetime.now().isoformat(timespec="seconds")
+            return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)
+        automation.api_settle_delay()
+
+        if self._abort:
+            raise AbortRun()
+
+        # 4. Message input: wait for the thread to load, click, paste
+        # (unless dry run, which leaves it empty on purpose).
+        if self._click_step(STEP_MESSAGE_INPUT) is None:
+            return fail("Message input never loaded")
         if not self.dry_run:
             automation.paste_text(message)
-            pasted_text = await self._text_at_rect(flow.message_input)
-            if not pasted_text.strip().startswith(message.strip()[:40]):
-                end = datetime.datetime.now().isoformat(timespec="seconds")
-                await self._reset_state()
-                return RunResult(
-                    username, config.STATUS_FAILED_UI_STUCK, timestamp_start=start,
-                    timestamp_end=end, notes="paste into message box did not verify",
-                )
+        automation.inter_step_delay()
 
-        # 5. Send button - clicked for real even in a dry run, per the
-        # empty-input safety net above.
-        self._click_rect(flow.send_button)
-        await asyncio.sleep(config.SEND_VERIFY_WAIT_S)
+        if self._abort:
+            raise AbortRun()
+
+        # 5. Send - clicked for real even in a dry run (message left empty,
+        # so most chat UIs simply no-op). Not verified either way.
+        if self._click_step(STEP_SEND_BUTTON) is None:
+            return fail("Send button not found")
+
         end = datetime.datetime.now().isoformat(timespec="seconds")
-        await self._reset_state()
+        self._reset_state()
+        status = config.STATUS_DRY_RUN_OK if self.dry_run else config.STATUS_SENT
+        notes = "clicked Send with an empty message (intentional no-op)" if self.dry_run else ""
+        return RunResult(username, status, timestamp_start=start, timestamp_end=end, notes=notes)
 
-        if self.dry_run:
-            return RunResult(
-                username, config.STATUS_DRY_RUN_OK, timestamp_start=start, timestamp_end=end,
-                notes="clicked Send with an empty message (intentional no-op)",
-            )
-
-        remaining_text = await self._text_at_rect(flow.message_input)
-        if remaining_text.strip() == "":
-            return RunResult(username, config.STATUS_SENT, timestamp_start=start, timestamp_end=end)
-        return RunResult(username, config.STATUS_FAILED_SEND_UNCONFIRMED, timestamp_start=start, timestamp_end=end)
-
-    async def run(self, usernames: list[str], message: str, on_progress=None) -> list[RunResult]:
+    def run(self, usernames: list[str], message: str, on_progress=None) -> list[RunResult]:
         # A dry run only ever exercises the first username - it's a
         # click-path sanity check, not a batch operation.
         if self.dry_run:
@@ -221,7 +165,7 @@ class Replayer:
 
                 automation.maybe_human_break(i)
                 try:
-                    result = await self.run_one(username, message)
+                    result = self.run_one(username, message)
                 except AbortRun:
                     result = RunResult(username, config.STATUS_ABORTED)
 

@@ -152,8 +152,18 @@ def click(x: float, y: float, jitter: bool = True) -> None:
     pyautogui.click()
 
 
-def hover_settle() -> None:
-    time.sleep(random.uniform(config.HOVER_SETTLE_MIN_S, config.HOVER_SETTLE_MAX_S))
+def inter_step_delay() -> None:
+    """Pause between steps within a single username's flow, so the whole
+    sequence doesn't fire off unnaturally fast."""
+    time.sleep(random.uniform(config.INTER_STEP_DELAY_MIN_S, config.INTER_STEP_DELAY_MAX_S))
+
+
+def api_settle_delay() -> None:
+    """Short pause right after an action that triggers an API call (pasting
+    a username to search, clicking Chat to open a thread), before polling
+    for the next element - avoids hammering the CPU with screenshots in the
+    first instant when nothing could possibly match yet."""
+    time.sleep(config.API_SETTLE_DELAY_S)
 
 
 def paste_text(text: str) -> None:

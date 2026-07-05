@@ -1,57 +1,43 @@
 """Tkinter control panel: paste usernames + message, run Record / Replay.
-Tkinter runs on the main thread; the WebSocket server and all async
-protocol work run on a background thread's asyncio event loop. Every call
-from a button handler into async code goes through
-`asyncio.run_coroutine_threadsafe`; every update coming back into the GUI
-from that thread goes through `self.after(0, ...)` to stay on the Tk thread.
+
+Fully synchronous native automation now (no browser extension, no
+WebSocket, no asyncio) - the only concurrency here is plain Python threads:
+pynput's own listener thread during recording, and a background
+threading.Thread for anything that blocks (screenshots, polling, sleeps)
+during preview/replay, so the Tk main loop stays responsive. Every update
+coming back from another thread goes through `self.after(0, ...)` to stay
+on the Tk thread.
 """
 from __future__ import annotations
 
-import asyncio
 import os
+import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
 
+import pyautogui
+from PIL import ImageDraw
+
 from . import automation, config, geometry
 from .recorder import Recorder
-from .replayer import Replayer, CALIBRATION_MARKERS
-from .ws_server import NativeBridge
+from .replayer import Replayer
 
 
 class App(tk.Tk):
-    def __init__(self, bridge: NativeBridge, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self) -> None:
         super().__init__()
         self.title("TikTok Shop Bulk Creator Messenger")
         self.geometry("720x620")
 
-        self.bridge = bridge
-        self.loop = loop
-        self.recorder = Recorder(bridge)
+        self.recorder = Recorder()
         self.replayer: Replayer | None = None
-        # Captured from the real foreground window at the moment of the
-        # user's first click during recording (see _start_recording) -
-        # guaranteed to be the right window, unlike guessing by title
-        # substring, which breaks whenever more than one Chrome window is
-        # open. Falls back to a title-substring guess only if recording
-        # hasn't happened yet this session.
-        self.browser_hwnd = automation.find_browser_hwnd("Chrome")
-
-        bridge.on("connected", lambda _m: self._set_status("connected"))
-        bridge.on("disconnected", lambda _m: self._set_status("disconnected"))
-        bridge.on("captcha_detected", lambda _m: self._on_captcha())
 
         self._build_widgets()
-        self._set_status("waiting for extension...")
         self._refresh_recording_status()
 
     # ---- widget layout -----------------------------------------------------
 
     def _build_widgets(self) -> None:
-        top = tk.Frame(self)
-        top.pack(fill="x", padx=8, pady=4)
-        self.status_label = tk.Label(top, text="", fg="gray")
-        self.status_label.pack(side="left")
-
         rec_frame = tk.LabelFrame(self, text="1. Record (5 clicks, one per prompt)")
         rec_frame.pack(fill="x", padx=8, pady=4)
         self.btn_record_start = tk.Button(rec_frame, text="Start Recording", command=self._start_recording)
@@ -95,22 +81,14 @@ class App(tk.Tk):
 
     # ---- helpers -------------------------------------------------------------
 
-    def _set_status(self, text: str) -> None:
-        self.status_label.config(text=f"Extension: {text}")
-
     def _log(self, line: str) -> None:
         self.log_text.config(state="normal")
         self.log_text.insert("end", line + "\n")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
-    def _run_async(self, coro) -> None:
-        asyncio.run_coroutine_threadsafe(coro, self.loop)
-
-    def _on_captcha(self) -> None:
-        self.after(0, lambda: messagebox.showwarning(
-            "Captcha detected", "TikTok showed a captcha. The run has been paused - solve it manually, then restart."
-        ))
+    def _run_bg(self, target, *args) -> None:
+        threading.Thread(target=target, args=args, daemon=True).start()
 
     def _refresh_recording_status(self) -> None:
         flow = Recorder.load()
@@ -120,34 +98,28 @@ class App(tk.Tk):
 
     def _start_recording(self) -> None:
         def on_progress(count, next_label):
-            if count == 1:
-                # The user's real click that produced this event is, right
-                # now, definitely happening in the correct browser window -
-                # a much more reliable source of the window handle than
-                # guessing by title substring at app startup.
-                hwnd = automation.current_foreground_hwnd()
-                if hwnd:
-                    self.browser_hwnd = hwnd
             text = f"Captured {count}/5. Next: click the {next_label}." if next_label else "All 5 points captured - saving..."
             self.after(0, lambda: self.recording_status_label.config(text=text))
             if next_label is None:
-                self._run_async(self._do_finish_recording())
+                self._finish_recording()
 
-        self._run_async(self.recorder.start(on_progress=on_progress))
+        self.recorder.start(on_progress=on_progress)
         self.btn_record_start.config(state="disabled")
         self.btn_record_cancel.config(state="normal")
         self.recording_status_label.config(text="Click the New message button now.")
         self._log("Recording started - click each point as prompted (New message, username input, Chat button, message input, Send button).")
 
     def _cancel_recording(self) -> None:
-        self._run_async(self.recorder.cancel())
+        self.recorder.cancel()
         self.btn_record_start.config(state="normal")
         self.btn_record_cancel.config(state="disabled")
         self.recording_status_label.config(text="Recording cancelled.")
         self._log("Recording cancelled.")
 
-    async def _do_finish_recording(self) -> None:
-        flow = await self.recorder.finish()
+    def _finish_recording(self) -> None:
+        # Called from the pynput listener thread (safe: pynput supports
+        # stopping a listener from within its own callback).
+        flow = self.recorder.finish()
         if flow is None:
             self.after(0, lambda: self._log("Recording finished with fewer than 5 points captured - not saved."))
             return
@@ -164,34 +136,26 @@ class App(tk.Tk):
         if not flow:
             messagebox.showerror("No recording", "Record the flow first.")
             return
-        self._log("Calibrating and rendering preview screenshot...")
-        self._run_async(self._do_preview(flow))
+        self._log("Rendering preview screenshot...")
+        self._run_bg(self._do_preview, flow)
 
-    async def _do_preview(self, flow) -> None:
-        if not automation.activate_browser_window(self.browser_hwnd):
+    def _do_preview(self, flow) -> None:
+        if not automation.activate_browser_window(flow.browser_hwnd):
             self.after(0, lambda: self._log("Preview failed: could not bring the browser window to the foreground."))
             return
-        try:
-            placed = await self.bridge.request(
-                "place_calibration_markers", {"markers": CALIBRATION_MARKERS}, timeout=config.REQUEST_TIMEOUT_S
-            )
-            verification = placed.get("verification")
-            self.after(0, lambda: self._log(f"Marker verification (as actually rendered by the page): {verification}"))
-            transform = await asyncio.to_thread(geometry.calibrate_via_screenshot)
-        except (ConnectionError, asyncio.TimeoutError) as e:
-            self.after(0, lambda: self._log(f"Preview failed: {e or e.__class__.__name__}"))
-            return
-        finally:
-            await self.bridge.send_fire_and_forget("remove_calibration_markers")
 
-        if transform is None:
-            self.after(0, lambda: self._log(
-                "Preview failed: calibration markers not found in the screenshot - "
-                "is the browser window fully visible and not covered by another window?"
-            ))
-            return
+        scale = geometry.measure_scale()
+        screenshot = pyautogui.screenshot()
+        draw = ImageDraw.Draw(screenshot)
+        radius = config.TEMPLATE_PATCH_RADIUS_PX
+        for i, point in enumerate(flow.points, start=1):
+            sx, sy = geometry.mouse_to_shot(point.mouse_x, point.mouse_y, scale)
+            draw.ellipse([sx - radius, sy - radius, sx + radius, sy + radius], outline=(255, 0, 0), width=3)
+            draw.line([sx - radius, sy, sx + radius, sy], fill=(255, 0, 0), width=1)
+            draw.line([sx, sy - radius, sx, sy + radius], fill=(255, 0, 0), width=1)
+            draw.text((sx + radius + 4, sy - radius), f"{i}", fill=(255, 0, 0))
+        screenshot.save(config.PREVIEW_IMAGE_PATH)
 
-        await asyncio.to_thread(geometry.render_preview, transform, flow, config.PREVIEW_IMAGE_PATH)
         try:
             os.startfile(config.PREVIEW_IMAGE_PATH)
         except Exception:
@@ -212,16 +176,16 @@ class App(tk.Tk):
             messagebox.showerror("Missing input", "Provide at least one username and a message.")
             return
 
-        self.replayer = Replayer(self.bridge, flow, browser_hwnd=self.browser_hwnd, dry_run=dry_run)
+        self.replayer = Replayer(flow, dry_run=dry_run)
         count = 1 if dry_run else len(usernames)
         self._log(f"Starting {'DRY RUN ' if dry_run else ''}replay for {count} username(s).")
-        self._run_async(self._do_replay(usernames, message))
+        self._run_bg(self._do_replay, usernames, message)
 
-    async def _do_replay(self, usernames: list[str], message: str) -> None:
+    def _do_replay(self, usernames: list[str], message: str) -> None:
         def on_progress(result):
             self.after(0, lambda: self._log(f"{result.username}: {result.status} ({result.notes})"))
 
-        results = await self.replayer.run(usernames, message, on_progress=on_progress)
+        results = self.replayer.run(usernames, message, on_progress=on_progress)
         ok_statuses = (config.STATUS_SENT, config.STATUS_DRY_RUN_OK)
         ok = sum(1 for r in results if r.status in ok_statuses)
         label = "reached Send" if self.replayer.dry_run else "sent"
