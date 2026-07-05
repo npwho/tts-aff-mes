@@ -16,8 +16,10 @@ MIN_DELAY_BETWEEN_USERNAMES_S = 8
 MAX_DELAY_BETWEEN_USERNAMES_S = 20
 
 # After a *successful* send, move on to the next username almost
-# immediately instead of the long randomized delay above.
-SUCCESS_NEXT_USER_DELAY_S = 0.5
+# immediately instead of the long randomized delay above - still enough
+# for the reset-state Escape presses' UI transitions to actually settle
+# before the next username's foreground check runs.
+SUCCESS_NEXT_USER_DELAY_S = 1.2
 
 # Every N usernames, insert one longer "human break" pause.
 HUMAN_BREAK_EVERY_N = 10

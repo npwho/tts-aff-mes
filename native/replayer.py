@@ -1,8 +1,12 @@
 """Replay against a recorded 5-point flow - fully native, no browser
 extension, no DOM queries, no WebSocket. Most clicks wait for their
 recorded template patch to visually reappear on screen before acting
-(confirming the element actually loaded, not just clicking a stale
-coordinate), refining the click point to wherever the match actually is.
+(confirming the element actually loaded, not just clicking blind), but
+ALWAYS click the originally recorded coordinate - never the matched
+position. A small template patch can false-positive-match unrelated
+content elsewhere on the page; letting that relocate the click defeats
+the entire point of recording an exact position. Template matching is
+purely a presence/timing gate here, never a source of click coordinates.
 The New message button and Username input are the exception: they're
 assumed to always be present once the page/dialog has had a moment to
 render, so those two just wait briefly and click the recorded position
@@ -66,7 +70,14 @@ class Replayer:
             self.on_pause_requested(message)
         self._pause_event.wait()
 
-    def _click_step(self, index: int, max_wait: float = config.STEP_MAX_WAIT_S) -> tuple[float, float] | None:
+    def _click_step(self, index: int, max_wait: float = config.STEP_MAX_WAIT_S) -> bool:
+        """Waits for the recorded template to appear (confirming the
+        element has loaded), but ALWAYS clicks the originally recorded
+        coordinate - never the matched position. A small template patch can
+        false-positive-match unrelated content elsewhere on the page;
+        letting that relocate the click defeats the entire point of
+        recording an exact position. Template matching here is purely a
+        presence/timing gate, not a source of click coordinates."""
         point = self.flow.points[index]
         template = self._templates[index]
         expected_x, expected_y = geometry.mouse_to_shot(point.mouse_x, point.mouse_y, self._scale)
@@ -75,10 +86,9 @@ class Replayer:
             template, expected_x, expected_y, max_wait_s=max_wait, should_abort=self._should_abort,
         )
         if result is None:
-            return None
-        mx, my = geometry.shot_to_mouse(result[0], result[1], self._scale)
-        automation.click(mx, my)
-        return (mx, my)
+            return False
+        automation.click(point.mouse_x, point.mouse_y)
+        return True
 
     def _click_fixed(self, index: int) -> None:
         """No image verification at all - used for steps assumed to always
@@ -89,13 +99,16 @@ class Replayer:
         time.sleep(config.FIXED_STEP_WAIT_S)
         automation.click(point.mouse_x, point.mouse_y)
 
-    def _click_chat_button(self) -> tuple[float, float] | None:
+    def _click_chat_button(self) -> bool:
         """Only appears on :hover. Checks once at the recorded position
         with no wiggling - if it's already visible, click it immediately.
         Only if it's NOT visible does it wiggle the mouse away and back
         (a single teleport onto the spot doesn't reliably fire the
         mouseenter/mouseover that reveals it), up to a fixed number of
-        attempts - not a time-based wait."""
+        attempts - not a time-based wait. Always clicks the originally
+        recorded coordinate (see _click_step for why), never a matched
+        position - the point we hover to reveal it is exactly where it
+        renders, so there's nothing to relocate to anyway."""
         point = self.flow.points[STEP_CHAT_BUTTON]
         template = self._templates[STEP_CHAT_BUTTON]
         expected_x, expected_y = geometry.mouse_to_shot(point.mouse_x, point.mouse_y, self._scale)
@@ -107,20 +120,26 @@ class Replayer:
         attempts = 0
         while result is None and attempts < config.HOVER_REVEAL_REPEATS:
             if self._should_abort():
-                return None
+                return False
             automation.hover_reveal_once(point.mouse_x, point.mouse_y)
             result = template_match.find_once(template, expected_x, expected_y)
             attempts += 1
 
         if result is None:
-            return None
-        mx, my = geometry.shot_to_mouse(result[0], result[1], self._scale)
-        automation.click(mx, my)
-        return (mx, my)
+            return False
+        automation.click(point.mouse_x, point.mouse_y)
+        return True
 
     def _check_foreground(self) -> bool:
-        if automation.is_browser_foreground(self.flow.browser_hwnd):
-            return True
+        # A single check can catch the window mid-transition (e.g. right
+        # after the previous username's reset-state Escape presses, before
+        # focus has fully settled back) and read as a false negative -
+        # retry a couple of times with a short pause before actually
+        # attempting to re-activate the window.
+        for _ in range(3):
+            if automation.is_browser_foreground(self.flow.browser_hwnd):
+                return True
+            time.sleep(0.3)
         return automation.activate_browser_window(self.flow.browser_hwnd)
 
     def _reset_state(self) -> None:
@@ -174,7 +193,7 @@ class Replayer:
         # few times (see _click_chat_button). If it still never appears,
         # the username doesn't exist (or the search never returned a
         # result) - not a stuck-UI failure.
-        if self._click_chat_button() is None:
+        if not self._click_chat_button():
             self._reset_state()
             end = datetime.datetime.now().isoformat(timespec="seconds")
             return RunResult(username, config.STATUS_SKIPPED_NOT_FOUND, timestamp_start=start, timestamp_end=end)
@@ -192,12 +211,13 @@ class Replayer:
         # place. If it still doesn't match after a few attempts, pause and
         # wait for a human rather than risk sending the wrong content (this
         # is how a stale clipboard paste bug was caught previously).
-        message_point = self._click_step(STEP_MESSAGE_INPUT)
-        if message_point is None:
+        if not self._click_step(STEP_MESSAGE_INPUT):
             return fail("Message input never loaded")
         if not self.dry_run:
-            mx, my = message_point
-            if not automation.paste_text_and_verify(message, lambda: automation.click(mx, my)):
+            message_point = self.flow.points[STEP_MESSAGE_INPUT]
+            if not automation.paste_text_and_verify(
+                message, lambda: automation.click(message_point.mouse_x, message_point.mouse_y)
+            ):
                 self._pause_for_user(
                     f"Could not verify the message pasted correctly for '{username}' after 3 attempts. "
                     "Check the message box, fix it manually if needed, then click Resume (or Stop to abort)."
@@ -211,7 +231,7 @@ class Replayer:
 
         # 5. Send - clicked for real even in a dry run (message left empty,
         # so most chat UIs simply no-op). Not verified either way.
-        if self._click_step(STEP_SEND_BUTTON) is None:
+        if not self._click_step(STEP_SEND_BUTTON):
             return fail("Send button not found")
 
         end = datetime.datetime.now().isoformat(timespec="seconds")
