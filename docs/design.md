@@ -65,22 +65,30 @@ Saved to `native/storage/recorded_flow.json` (`models.RecordedFlow`).
 
 Per username, a fixed sequence (not a generic loop):
 
-1. **New message** - wait for its template to match, click.
-2. **Username input** - wait, click, paste the username, then a short
-   settle delay (`API_SETTLE_DELAY_S`) before the next step, since pasting
-   triggers a search API call.
-3. **Chat button** - hover at its recorded point (which lies inside the
-   search result row, so hovering there *is* what triggers the row's CSS
-   hover reveal) and poll for its template to appear, up to
-   `STEP_MAX_WAIT_S` (default 8s). **If it never appears, that's treated as
-   the username not existing** (`SKIPPED_NOT_FOUND`) - there's no DOM
-   existence check anymore, so this timeout is the only signal for it.
-4. **Message input** - wait (thread loading is another API call), click,
-   paste the message unless this is a dry run.
-5. **Send** - wait, click. Not verified either way; the run just moves on.
+1. **New message** - no image verification at all; assumed to always be
+   present once the page has had a moment to render. Waits
+   `FIXED_STEP_WAIT_S` (default 1s), then clicks the recorded position
+   directly (`Replayer._click_fixed`).
+2. **Username input** - same as above (wait, click directly, no
+   verification), then paste the username and a short settle delay
+   (`API_SETTLE_DELAY_S`) before the next step, since pasting triggers a
+   search API call.
+3. **Chat button** - checked once at its recorded position first; if
+   already visible, clicked immediately with no wiggling. Only if not
+   visible does it wiggle the mouse away and back (hovering there also *is*
+   what triggers the row's CSS hover reveal in the first place) up to
+   `HOVER_REVEAL_REPEATS` times, checking after each. **If it's still never
+   found, that's treated as the username not existing**
+   (`SKIPPED_NOT_FOUND`) - there's no DOM existence check anymore, so this
+   is the only signal for it.
+4. **Message input** - image-verified: polls (`STEP_MAX_WAIT_S`, default
+   8s) for its template to appear, since the thread loading is another API
+   call, then clicks, then pastes the message unless this is a dry run.
+5. **Send** - image-verified the same way, then clicked. Not verified
+   either way after that; the run just moves on.
 
-Every wait-and-click goes through the same `template_match.wait_for_match`
-polling loop: take a screenshot, search a margin (`TEMPLATE_SEARCH_MARGIN_PX`)
+Steps 4 and 5 go through the `template_match.wait_for_match` polling loop:
+take a screenshot, search a margin (`TEMPLATE_SEARCH_MARGIN_PX`)
 around the expected position for the recorded template, and if found,
 refine the click target to wherever the match actually is (correcting any
 small drift from the originally recorded position) rather than blindly

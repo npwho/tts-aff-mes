@@ -51,12 +51,20 @@ HOVER_REVEAL_PAUSE_S = 0.15
 # needs real time to render before a screenshot will show it.
 HOVER_REVEAL_SETTLE_S = 0.35
 
-# Template matching (native/template_match.py).
-TEMPLATE_PATCH_RADIUS_PX = 30
+# Template matching (native/template_match.py). A smaller patch is more
+# sensitive to just the button/icon itself rather than surrounding content
+# that can shift or change between recording and replay.
+TEMPLATE_PATCH_RADIUS_PX = 14
 TEMPLATE_SEARCH_MARGIN_PX = 150
 TEMPLATE_MATCH_THRESHOLD = 0.7
 TEMPLATE_POLL_INTERVAL_S = 0.5
 STEP_MAX_WAIT_S = 8.0
+
+# Steps that don't get image verification at all (New message button,
+# Username input) - assumed to always be present once the page/dialog has
+# had a moment to render, so this just waits a bit then clicks the
+# recorded position directly.
+FIXED_STEP_WAIT_S = 1.0
 
 STATUS_SENT = "SENT"
 STATUS_SKIPPED_NOT_FOUND = "SKIPPED_NOT_FOUND"

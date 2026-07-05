@@ -50,12 +50,14 @@ in your normal, already-logged-in browser and run the tool alongside it.
      (`native/storage/recording_preview.png`). Check every circle actually
      lands on the right button/input before trusting a replay run.
 2. **Replay** — paste usernames (one per line) and the message into the
-   tool, click Start. For each username, every click waits (up to 8s,
-   polling) for its recorded element to visually reappear before acting -
-   this is what makes the tool tolerate normal page-load/API latency
-   without needing fixed guessed delays. If the Chat button never appears
-   after hovering, that username is logged `SKIPPED_NOT_FOUND` and the
-   tool moves on automatically. Results are written incrementally to
+   tool, click Start. New message and Username input just wait a moment
+   and click directly (no image check - they're always there once the page
+   loads); Chat button, Message input, and Send wait for their recorded
+   element to visually reappear before acting, which is what makes the
+   tool tolerate normal page-load/API latency without needing fixed
+   guessed delays. If the Chat button never appears after hovering, that
+   username is logged `SKIPPED_NOT_FOUND` and the tool moves on
+   automatically. Results are written incrementally to
    `native/logs/run_<timestamp>.csv`.
    - Check **"Dry run"** first — it runs the *entire* click sequence (New
      message → username → hover+click Chat → message input → Send) for

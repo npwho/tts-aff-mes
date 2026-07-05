@@ -1,8 +1,12 @@
 """Replay against a recorded 5-point flow - fully native, no browser
-extension, no DOM queries, no WebSocket. Each click waits for its recorded
-template patch to visually reappear on screen before acting (confirming the
-element actually loaded, not just clicking a stale coordinate), refining
-the click point to wherever the match actually is.
+extension, no DOM queries, no WebSocket. Most clicks wait for their
+recorded template patch to visually reappear on screen before acting
+(confirming the element actually loaded, not just clicking a stale
+coordinate), refining the click point to wherever the match actually is.
+The New message button and Username input are the exception: they're
+assumed to always be present once the page/dialog has had a moment to
+render, so those two just wait briefly and click the recorded position
+directly, with no image verification at all.
 
 "Not found" (username doesn't exist) is inferred purely from the Chat
 button's template never appearing after hovering - there's no DOM-based
@@ -57,6 +61,15 @@ class Replayer:
         mx, my = geometry.shot_to_mouse(result[0], result[1], self._scale)
         automation.click(mx, my)
         return (mx, my)
+
+    def _click_fixed(self, index: int) -> None:
+        """No image verification at all - used for steps assumed to always
+        be present once the page/dialog has had a moment to render (New
+        message button, Username input). Just waits a bit then clicks the
+        originally recorded position directly."""
+        point = self.flow.points[index]
+        time.sleep(config.FIXED_STEP_WAIT_S)
+        automation.click(point.mouse_x, point.mouse_y)
 
     def _click_chat_button(self) -> tuple[float, float] | None:
         """Only appears on :hover. Checks once at the recorded position
@@ -117,17 +130,17 @@ class Replayer:
         if self._abort:
             raise AbortRun()
 
-        # 1. New message
-        if self._click_step(STEP_NEW_MESSAGE) is None:
-            return fail("New message button not found")
+        # 1. New message - no image verification, just wait a moment for
+        # the page to be ready and click the recorded position directly.
+        self._click_fixed(STEP_NEW_MESSAGE)
         automation.inter_step_delay()
 
         if self._abort:
             raise AbortRun()
 
-        # 2. Username input: click, paste, let the search API call fire
-        if self._click_step(STEP_USERNAME_INPUT) is None:
-            return fail("Username input not found")
+        # 2. Username input - same: wait for the dialog to render, click
+        # directly, paste, let the search API call fire.
+        self._click_fixed(STEP_USERNAME_INPUT)
         automation.paste_text(username)
         automation.api_settle_delay()
 
